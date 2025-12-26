@@ -1,0 +1,36 @@
+# Rust
+target/
+Cargo.lock
+
+# WASM build artifacts
+*.wasm
+examples/*/target/
+examples/*/Cargo.lock
+
+# Test outputs
+test-output.db
+test-output.db-shm
+test-output.db-wal
+test-modules/
+test-input/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Misc
+*.log
+*.tmp
+*.bak
+
+# Claude
+.claude

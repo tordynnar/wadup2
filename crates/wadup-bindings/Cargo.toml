@@ -1,0 +1,11 @@
+[package]
+name = "wadup-bindings"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasmtime = "26"
