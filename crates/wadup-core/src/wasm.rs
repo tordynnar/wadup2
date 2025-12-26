@@ -1,4 +1,5 @@
 use wasmtime::*;
+use wasmtime_wasi::preview1::WasiP1Ctx;
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
@@ -10,6 +11,12 @@ pub struct ResourceLimits {
     pub fuel: Option<u64>,
     pub max_memory: Option<usize>,
     pub max_stack: Option<usize>,
+}
+
+// Wrapper to combine ProcessingContext with WASI support
+pub struct StoreData {
+    pub processing_ctx: ProcessingContext,
+    pub wasi_ctx: WasiP1Ctx,
 }
 
 pub struct WasmRuntime {
@@ -131,7 +138,7 @@ impl ResourceLimiter for ResourceLimiterImpl {
 }
 
 pub struct ModuleInstance {
-    store: Store<ProcessingContext>,
+    store: Store<StoreData>,
     instance: Instance,
     name: String,
     fuel_limit: Option<u64>,
@@ -153,7 +160,24 @@ impl ModuleInstance {
             Arc::new(Vec::new()),
         );
 
-        let mut store = Store::new(engine, dummy_ctx);
+        // Create WASI context for Preview1
+        use wasmtime_wasi::{DirPerms, FilePerms};
+        let wasi_ctx = wasmtime_wasi::WasiCtxBuilder::new()
+            .inherit_stdio()
+            .preopened_dir(
+                "/tmp",
+                "/tmp",
+                DirPerms::all(),
+                FilePerms::all(),
+            )?
+            .build_p1();
+
+        let store_data = StoreData {
+            processing_ctx: dummy_ctx,
+            wasi_ctx,
+        };
+
+        let mut store = Store::new(engine, store_data);
 
         // Set fuel limit if specified
         if let Some(fuel) = limits.fuel {
@@ -168,6 +192,9 @@ impl ModuleInstance {
         });
 
         let mut linker = Linker::new(engine);
+
+        // Add WASI Preview1 functions
+        wasmtime_wasi::preview1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi_ctx)?;
 
         // Add host functions
         Self::add_host_functions(&mut linker)?;
@@ -184,62 +211,140 @@ impl ModuleInstance {
         })
     }
 
-    fn add_host_functions(linker: &mut Linker<ProcessingContext>) -> Result<()> {
-        use wadup_bindings::host;
+    fn add_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
+        use wadup_bindings::context::{MetadataRow, SubContentEmission, SubContentData};
+        use wadup_bindings::types::{Column, Value, TableSchema};
+
+        // Helper to get memory
+        fn get_memory<T>(caller: &mut Caller<T>) -> Result<Memory> {
+            caller.get_export("memory")
+                .and_then(|e| e.into_memory())
+                .ok_or_else(|| anyhow::anyhow!("No memory export found"))
+        }
+
+        // Helper to read string
+        fn read_string<T>(caller: &mut Caller<T>, memory: Memory, ptr: i32, len: i32) -> Result<String> {
+            if ptr < 0 || len < 0 {
+                anyhow::bail!("Invalid pointer or length");
+            }
+            let mut buffer = vec![0u8; len as usize];
+            memory.read(caller, ptr as usize, &mut buffer)?;
+            Ok(String::from_utf8(buffer)?)
+        }
 
         linker.func_wrap(
             "env",
             "define_table",
-            |caller: Caller<ProcessingContext>, name_ptr: i32, name_len: i32, cols_ptr: i32, cols_len: i32| -> Result<i32> {
-                host::define_table(caller, name_ptr, name_len, cols_ptr, cols_len)
+            |mut caller: Caller<StoreData>, name_ptr: i32, name_len: i32, cols_ptr: i32, cols_len: i32| -> Result<i32> {
+                let memory = get_memory(&mut caller)?;
+                let table_name = read_string(&mut caller, memory, name_ptr, name_len)?;
+                let columns_json = read_string(&mut caller, memory, cols_ptr, cols_len)?;
+                let columns: Vec<Column> = serde_json::from_str(&columns_json)?;
+                caller.data_mut().processing_ctx.table_schemas.push(TableSchema {
+                    name: table_name,
+                    columns,
+                });
+                Ok(0)
             },
         )?;
 
         linker.func_wrap(
             "env",
             "insert_row",
-            |caller: Caller<ProcessingContext>, table_ptr: i32, table_len: i32, row_ptr: i32, row_len: i32| -> Result<i32> {
-                host::insert_row(caller, table_ptr, table_len, row_ptr, row_len)
+            |mut caller: Caller<StoreData>, table_ptr: i32, table_len: i32, row_ptr: i32, row_len: i32| -> Result<i32> {
+                let memory = get_memory(&mut caller)?;
+                let table_name = read_string(&mut caller, memory, table_ptr, table_len)?;
+                let row_json = read_string(&mut caller, memory, row_ptr, row_len)?;
+                let values: Vec<Value> = serde_json::from_str(&row_json)?;
+                caller.data_mut().processing_ctx.metadata.push(MetadataRow {
+                    table_name,
+                    values,
+                });
+                Ok(0)
             },
         )?;
 
         linker.func_wrap(
             "env",
             "emit_subcontent_bytes",
-            |caller: Caller<ProcessingContext>, data_ptr: i32, data_len: i32, fname_ptr: i32, fname_len: i32| -> Result<i32> {
-                host::emit_subcontent_bytes(caller, data_ptr, data_len, fname_ptr, fname_len)
+            |mut caller: Caller<StoreData>, data_ptr: i32, data_len: i32, fname_ptr: i32, fname_len: i32| -> Result<i32> {
+                if data_ptr < 0 || data_len < 0 {
+                    anyhow::bail!("Invalid data pointer or length");
+                }
+                let memory = get_memory(&mut caller)?;
+                let mut data = vec![0u8; data_len as usize];
+                memory.read(&caller, data_ptr as usize, &mut data)?;
+                let filename = read_string(&mut caller, memory, fname_ptr, fname_len)?;
+                caller.data_mut().processing_ctx.subcontent.push(SubContentEmission {
+                    data: SubContentData::Bytes(data),
+                    filename,
+                });
+                Ok(0)
             },
         )?;
 
         linker.func_wrap(
             "env",
             "emit_subcontent_slice",
-            |caller: Caller<ProcessingContext>, offset: i32, length: i32, fname_ptr: i32, fname_len: i32| -> Result<i32> {
-                host::emit_subcontent_slice(caller, offset, length, fname_ptr, fname_len)
+            |mut caller: Caller<StoreData>, offset: i32, length: i32, fname_ptr: i32, fname_len: i32| -> Result<i32> {
+                if offset < 0 || length < 0 {
+                    anyhow::bail!("Invalid offset or length");
+                }
+                let content_size = caller.data().processing_ctx.content_data.len();
+                if (offset as usize + length as usize) > content_size {
+                    anyhow::bail!("Slice out of bounds");
+                }
+                let memory = get_memory(&mut caller)?;
+                let filename = read_string(&mut caller, memory, fname_ptr, fname_len)?;
+                caller.data_mut().processing_ctx.subcontent.push(SubContentEmission {
+                    data: SubContentData::Slice {
+                        offset: offset as usize,
+                        length: length as usize,
+                    },
+                    filename,
+                });
+                Ok(0)
             },
         )?;
 
         linker.func_wrap(
             "env",
             "get_content_size",
-            |caller: Caller<ProcessingContext>| -> i32 {
-                host::get_content_size(caller)
+            |caller: Caller<StoreData>| -> i32 {
+                caller.data().processing_ctx.content_data.len() as i32
             },
         )?;
 
         linker.func_wrap(
             "env",
             "read_content",
-            |caller: Caller<ProcessingContext>, offset: i32, length: i32, dest_ptr: i32| -> Result<i32> {
-                host::read_content(caller, offset, length, dest_ptr)
+            |mut caller: Caller<StoreData>, offset: i32, length: i32, dest_ptr: i32| -> Result<i32> {
+                if offset < 0 || length < 0 || dest_ptr < 0 {
+                    anyhow::bail!("Invalid parameters");
+                }
+                let offset = offset as usize;
+                let length = length as usize;
+                let content = caller.data().processing_ctx.content_data.clone();
+                if offset + length > content.len() {
+                    anyhow::bail!("Read out of bounds");
+                }
+                let memory = get_memory(&mut caller)?;
+                memory.write(&mut caller, dest_ptr as usize, &content[offset..offset+length])?;
+                Ok(0)
             },
         )?;
 
         linker.func_wrap(
             "env",
             "get_content_uuid",
-            |caller: Caller<ProcessingContext>, dest_ptr: i32| -> Result<i32> {
-                host::get_content_uuid(caller, dest_ptr)
+            |mut caller: Caller<StoreData>, dest_ptr: i32| -> Result<i32> {
+                if dest_ptr < 0 {
+                    anyhow::bail!("Invalid pointer");
+                }
+                let uuid_bytes = *caller.data().processing_ctx.content_uuid.as_bytes();
+                let memory = get_memory(&mut caller)?;
+                memory.write(&mut caller, dest_ptr as usize, &uuid_bytes)?;
+                Ok(0)
             },
         )?;
 
@@ -253,7 +358,7 @@ impl ModuleInstance {
     ) -> Result<ProcessingContext> {
         // Set up new context
         let ctx = ProcessingContext::new(content_uuid, content_data);
-        *self.store.data_mut() = ctx;
+        self.store.data_mut().processing_ctx = ctx;
 
         // Replenish fuel
         if let Some(fuel) = self.fuel_limit {
@@ -270,7 +375,7 @@ impl ModuleInstance {
         match result {
             Ok(0) => {
                 // Success - extract context
-                let ctx = self.store.data_mut();
+                let ctx = &mut self.store.data_mut().processing_ctx;
                 let extracted = ProcessingContext {
                     content_uuid: ctx.content_uuid,
                     content_data: ctx.content_data.clone(),

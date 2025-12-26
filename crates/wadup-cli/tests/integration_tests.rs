@@ -17,15 +17,37 @@ fn wadup_binary() -> PathBuf {
     path
 }
 
+fn get_wasm_target(example_name: &str) -> &'static str {
+    // sqlite-parser needs WASI for rusqlite
+    if example_name == "sqlite-parser" {
+        "wasm32-wasip1"
+    } else {
+        "wasm32-unknown-unknown"
+    }
+}
+
 fn build_wasm_module(example_name: &str) -> PathBuf {
     let mut manifest_path = workspace_root();
     manifest_path.push("examples");
     manifest_path.push(example_name);
     manifest_path.push("Cargo.toml");
 
-    let status = Command::new("cargo")
-        .args(&["build", "--manifest-path", manifest_path.to_str().unwrap(), "--target", "wasm32-unknown-unknown", "--release"])
-        .status()
+    let target = get_wasm_target(example_name);
+
+    let mut cmd = Command::new("cargo");
+    cmd.args(&["build", "--manifest-path", manifest_path.to_str().unwrap(), "--target", target, "--release"]);
+
+    // Set WASI_SDK_PATH for WASI targets
+    if target.contains("wasi") {
+        cmd.env("WASI_SDK_PATH", "/tmp/wasi-sdk-24.0-arm64-macos");
+    }
+
+    // Special settings for sqlite-parser to disable threading
+    if example_name == "sqlite-parser" {
+        cmd.env("LIBSQLITE3_FLAGS", "-DSQLITE_THREADSAFE=0");
+    }
+
+    let status = cmd.status()
         .expect(&format!("Failed to build {} module", example_name));
 
     assert!(status.success(), "{} module build failed", example_name);
@@ -34,7 +56,7 @@ fn build_wasm_module(example_name: &str) -> PathBuf {
     path.push("examples");
     path.push(example_name);
     path.push("target");
-    path.push("wasm32-unknown-unknown");
+    path.push(target);
     path.push("release");
     path.push(&format!("{}.wasm", example_name.replace("-", "_")));
 

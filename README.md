@@ -220,7 +220,24 @@ Module-defined tables use `content_uuid` as a foreign key to `__wadup_content.uu
 See the `examples/` directory for working WASM modules:
 
 - **byte-counter**: Counts and records file sizes
-- **simple-test**: Minimal test module
+- **zip-extractor**: Extracts files from ZIP archives
+- **sqlite-parser**: Parses SQLite databases using SQL queries (requires WASI)
+
+### Building the SQLite Parser Example
+
+The sqlite-parser example requires the WASI SDK to compile SQLite's C code to WebAssembly. Use the provided build script:
+
+```bash
+cd examples/sqlite-parser
+./build.sh
+```
+
+The build script will automatically:
+- Detect your platform
+- Download WASI SDK if not present
+- Build the module for wasm32-wasip1 target
+
+See [examples/sqlite-parser/README.md](examples/sqlite-parser/README.md) for detailed documentation.
 
 ## Development
 
