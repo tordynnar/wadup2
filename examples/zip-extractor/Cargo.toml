@@ -1,0 +1,13 @@
+[package]
+name = "zip-extractor"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wadup-guest = { path = "../../crates/wadup-guest" }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }

@@ -1,5 +1,6 @@
 use crate::ffi;
 use uuid::Uuid;
+use std::io::{self, Read, Seek, SeekFrom};
 
 pub struct Content;
 
@@ -44,5 +45,76 @@ impl Content {
     pub fn read_string() -> Result<String, String> {
         let bytes = Self::read_all()?;
         String::from_utf8(bytes).map_err(|e| format!("Content is not valid UTF-8: {}", e))
+    }
+
+    /// Create a reader for the content that implements Read and Seek
+    pub fn reader() -> ContentReader {
+        ContentReader::new()
+    }
+}
+
+/// A reader for content that implements Read and Seek traits
+pub struct ContentReader {
+    position: usize,
+    size: usize,
+}
+
+impl ContentReader {
+    pub fn new() -> Self {
+        Self {
+            position: 0,
+            size: Content::size(),
+        }
+    }
+}
+
+impl Default for ContentReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Read for ContentReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.position >= self.size {
+            return Ok(0); // EOF
+        }
+
+        let remaining = self.size - self.position;
+        let to_read = buf.len().min(remaining);
+
+        if to_read == 0 {
+            return Ok(0);
+        }
+
+        let data = Content::read(self.position, to_read)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        buf[..to_read].copy_from_slice(&data);
+        self.position += to_read;
+
+        Ok(to_read)
+    }
+}
+
+impl Seek for ContentReader {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let new_pos = match pos {
+            SeekFrom::Start(offset) => offset as i64,
+            SeekFrom::End(offset) => self.size as i64 + offset,
+            SeekFrom::Current(offset) => self.position as i64 + offset,
+        };
+
+        if new_pos < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot seek before start of content",
+            ));
+        }
+
+        // Allow seeking past the end (this is standard behavior for Seek)
+        self.position = new_pos as usize;
+
+        Ok(self.position as u64)
     }
 }
