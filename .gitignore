@@ -11,6 +11,10 @@ examples/*/Cargo.lock
 examples/python-sqlite-parser/python-wasi/
 examples/python-sqlite-parser/src/*.o
 examples/python-sqlite-parser/src/script.py.h
+examples/python-counter/python-wasi/
+examples/python-counter/src/*.o
+examples/python-counter/src/script.py.h
+examples/python-counter/target/
 
 # Test outputs
 test-output.db

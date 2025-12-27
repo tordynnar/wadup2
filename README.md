@@ -5,6 +5,7 @@ A high-performance parallel processing framework that executes sandboxed WebAsse
 ## Features
 
 - **Parallel Processing**: Work-stealing threadpool for optimal CPU utilization
+- **Module Reuse**: WASM modules loaded once at startup and reused across all files, eliminating per-file initialization overhead
 - **Sandboxed Execution**: WASM modules run in isolated environments with configurable resource limits
 - **Resource Control**: CPU (fuel), memory, stack size, and recursion depth limits
 - **Metadata Collection**: SQLite database with automatic schema validation
@@ -144,6 +145,26 @@ The processing engine containing:
 - **Processor**: Work-stealing parallel execution
 - **Host Bindings**: FFI exports for WASM modules (define_table, insert_row, emit_subcontent, etc.)
 
+### Module Lifecycle and Performance
+
+WADUP is designed for efficient processing of many files:
+
+1. **Module Loading** (startup): All `.wasm` files are loaded from the modules directory and compiled once
+2. **Instance Creation** (per thread): Each worker thread creates one instance of each module
+3. **File Processing** (runtime): The same module instances are reused to process all files assigned to that thread
+
+**Key Benefits**:
+- Module compilation happens once at startup, not per file
+- WASM linear memory persists across files, allowing modules to maintain state if desired
+- For Python modules using CPython, the interpreter is initialized once per thread and reused for all files
+- Eliminates per-file initialization overhead (especially important for Python: ~20ms saved per file)
+
+**Example**: Processing 1000 SQLite databases with the Python module:
+- Without reuse: 1000 × 20ms = 20 seconds wasted on Python initialization
+- With reuse: 1 × 20ms = 20ms total initialization (999× speedup)
+
+This architecture makes WADUP suitable for batch processing large numbers of files efficiently.
+
 ### wadup-guest
 Rust library for WASM module authors:
 - **Content API**: Read content data and metadata
@@ -278,6 +299,8 @@ This is a more complex build that:
 - Builds SQLite 3.45.1 for WASI
 - Freezes Python stdlib modules into the binary
 - Creates a self-contained ~26MB WASM module
+
+**Important**: The Python interpreter is initialized once per worker thread and reused across all files. Python global variables persist between files processed by the same thread. The module's `process()` function should be idempotent or explicitly reset state as needed.
 
 See [examples/python-sqlite-parser/README.md](examples/python-sqlite-parser/README.md) for complete documentation, architecture details, and troubleshooting.
 

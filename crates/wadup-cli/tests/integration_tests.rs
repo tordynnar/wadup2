@@ -253,21 +253,27 @@ fn test_combined_sqlite_and_zip() {
 }
 
 // Helper function to build Python WASM module (doesn't use Cargo)
-fn build_python_module() -> PathBuf {
+fn build_python_module(module_name: &str) -> PathBuf {
     let mut python_example = workspace_root();
-    python_example.push("examples/python-sqlite-parser");
+    python_example.push(format!("examples/{}", module_name));
 
-    // Run build.sh script
-    let build_status = Command::new("./build.sh")
+    // Run build.sh script (or just 'make' for simpler builds)
+    let build_command = if module_name == "python-sqlite-parser" {
+        "./build.sh"
+    } else {
+        "make"
+    };
+
+    let build_status = Command::new(build_command)
         .current_dir(&python_example)
         .status()
-        .expect("Failed to run build.sh for python-sqlite-parser");
+        .expect(&format!("Failed to run {} for {}", build_command, module_name));
 
-    assert!(build_status.success(), "Python module build failed");
+    assert!(build_status.success(), "{} module build failed", module_name);
 
     // Return path to WASM file
     let mut wasm_path = python_example;
-    wasm_path.push("target/python_sqlite_parser.wasm");
+    wasm_path.push(format!("target/{}.wasm", module_name.replace("-", "_")));
 
     assert!(wasm_path.exists(), "Python WASM module not found at {:?}", wasm_path);
     wasm_path
@@ -284,7 +290,7 @@ fn test_python_sqlite_parser() {
     assert!(status.success(), "CLI build failed");
 
     // Build Python module
-    let python_wasm = build_python_module();
+    let python_wasm = build_python_module("python-sqlite-parser");
 
     // Setup modules directory
     let modules_dir = tempfile::tempdir().unwrap();
@@ -343,4 +349,75 @@ fn test_python_sqlite_parser() {
     assert!(python_stats.len() >= 2, "Expected at least 2 tables");
     assert!(python_stats.iter().any(|(name, _)| name == "users"),
             "Missing 'users' table");
+}
+
+#[test]
+fn test_python_module_reuse() {
+    // This test verifies that Python modules are loaded once and reused across
+    // multiple files, rather than being re-initialized for each file.
+    // The python-counter module maintains a global counter that increments
+    // on each call. If the module is properly reused, we should see 1, 2, 3...
+    // If it's being reloaded, we'd see 1, 1, 1...
+
+    // Build the CLI
+    let status = Command::new("cargo")
+        .args(&["build", "--release"])
+        .current_dir(workspace_root())
+        .status()
+        .expect("Failed to build wadup CLI");
+    assert!(status.success(), "CLI build failed");
+
+    // Build Python counter module
+    let python_wasm = build_python_module("python-counter");
+
+    // Setup modules directory
+    let modules_dir = tempfile::tempdir().unwrap();
+    let dest = modules_dir.path().join("python_counter.wasm");
+    fs::copy(&python_wasm, &dest).unwrap();
+
+    // Setup input directory with 3 test files
+    let input_dir = tempfile::tempdir().unwrap();
+    fs::write(input_dir.path().join("file1.txt"), "test1").unwrap();
+    fs::write(input_dir.path().join("file2.txt"), "test2").unwrap();
+    fs::write(input_dir.path().join("file3.txt"), "test3").unwrap();
+
+    // Setup output database
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_db = output_dir.path().join("output.db");
+
+    // Run wadup with single thread to ensure sequential processing
+    let status = Command::new(wadup_binary())
+        .args(&[
+            "--modules", modules_dir.path().to_str().unwrap(),
+            "--input", input_dir.path().to_str().unwrap(),
+            "--output", output_db.to_str().unwrap(),
+            "--threads", "1",  // Single thread for deterministic ordering
+        ])
+        .status()
+        .expect("Failed to run wadup");
+
+    assert!(status.success(), "wadup execution failed");
+
+    // Verify results - counter should increment
+    let conn = rusqlite::Connection::open(&output_db).unwrap();
+
+    // Get all counter values ordered by ROWID
+    let counter_values: Vec<i64> = conn.prepare(
+        "SELECT call_number FROM call_counter ORDER BY ROWID"
+    ).unwrap()
+    .query_map([], |row| row.get(0))
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap();
+
+    // Verify we have exactly 3 values
+    assert_eq!(counter_values.len(), 3, "Expected 3 counter values, got {}", counter_values.len());
+
+    // Verify the counter incremented (module was reused)
+    assert_eq!(counter_values[0], 1, "First call should be 1");
+    assert_eq!(counter_values[1], 2, "Second call should be 2 (module reused)");
+    assert_eq!(counter_values[2], 3, "Third call should be 3 (module reused)");
+
+    println!("✓ Module reuse verified: counter values are {}, {}, {}",
+             counter_values[0], counter_values[1], counter_values[2]);
 }
