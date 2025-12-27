@@ -8,7 +8,7 @@ A high-performance parallel processing framework that executes sandboxed WebAsse
 - **Sandboxed Execution**: WASM modules run in isolated environments with configurable resource limits
 - **Resource Control**: CPU (fuel), memory, stack size, and recursion depth limits
 - **Metadata Collection**: SQLite database with automatic schema validation
-- **Zero-Copy Sub-Content**: Efficient content slicing without duplication
+- **Zero-Copy Architecture**: Memory-mapped file loading and SharedBuffer-based content slicing without duplication
 - **Recursive Processing**: Sub-content automatically queued for processing
 - **Ergonomic API**: Rust guest library for easy WASM module development
 
@@ -44,10 +44,10 @@ WADUP modules are written in Rust and compiled to `wasm32-wasip1` (WASI target).
 ### Virtual Filesystem
 
 Each WASM module runs in a sandboxed virtual filesystem where:
-- **`/data.bin`** - The content being processed (read-only)
+- **`/data.bin`** - The content being processed (read-only, zero-copy reference)
 - **`/tmp/`** - Available for temporary files (read-write)
 
-Modules can access content using standard file I/O operations.
+Modules can access content using standard file I/O operations. The `/data.bin` file is a zero-copy reference to the content data, implemented using `bytes::Bytes` for optimal memory efficiency.
 
 ### Example: File Size Counter
 
@@ -133,20 +133,16 @@ Options:
 
 ## Architecture
 
-WADUP consists of four main crates:
+WADUP consists of three main crates:
 
 ### wadup-core
 The processing engine containing:
-- **Content Store**: Zero-copy content management with Arc-based slicing
-- **WASM Runtime**: wasmtime integration with resource limits
+- **SharedBuffer**: Zero-copy memory abstraction using `bytes::Bytes` with memory-mapped file loading
+- **Content Store**: Zero-copy content management with SharedBuffer-based slicing
+- **WASM Runtime**: wasmtime integration with resource limits and virtual filesystem
 - **Metadata Store**: SQLite with schema validation and WAL mode
 - **Processor**: Work-stealing parallel execution
-
-### wadup-bindings
-Host/guest communication layer:
-- **Host Functions**: FFI exports (define_table, insert_row, emit_subcontent, etc.)
-- **Processing Context**: Shared state between host and WASM
-- **Type Definitions**: Shared data structures
+- **Host Bindings**: FFI exports for WASM modules (define_table, insert_row, emit_subcontent, etc.)
 
 ### wadup-guest
 Rust library for WASM module authors:
