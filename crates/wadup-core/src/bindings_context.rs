@@ -1,17 +1,17 @@
 use uuid::Uuid;
-use std::sync::Arc;
 use crate::bindings_types::{Value, TableSchema};
+use crate::shared_buffer::SharedBuffer;
 
 pub struct ProcessingContext {
     pub content_uuid: Uuid,
-    pub content_data: Arc<Vec<u8>>,
+    pub content_data: SharedBuffer,
     pub subcontent: Vec<SubContentEmission>,
     pub metadata: Vec<MetadataRow>,
     pub table_schemas: Vec<TableSchema>,
 }
 
 impl ProcessingContext {
-    pub fn new(content_uuid: Uuid, content_data: Arc<Vec<u8>>) -> Self {
+    pub fn new(content_uuid: Uuid, content_data: SharedBuffer) -> Self {
         Self {
             content_uuid,
             content_data,

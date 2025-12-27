@@ -145,8 +145,9 @@ fn load_files(input_dir: &PathBuf) -> Result<Vec<Content>> {
                 .to_string();
 
             tracing::debug!("Loading file: {}", filename);
-            let data = std::fs::read(&path)?;
-            let content = Content::new_root(data, filename);
+            // Use memory mapping for zero-copy file loading
+            let buffer = wadup_core::shared_buffer::SharedBuffer::from_file(&path)?;
+            let content = Content::new_root(buffer, filename);
 
             contents.push(content);
         }

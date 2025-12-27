@@ -6,6 +6,7 @@ pub mod memory_fs;
 pub mod wasi_impl;
 pub mod bindings_types;
 pub mod bindings_context;
+pub mod shared_buffer;
 
 pub use content::*;
 pub use metadata::*;

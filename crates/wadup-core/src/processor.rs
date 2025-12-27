@@ -1,6 +1,5 @@
 use anyhow::Result;
 use std::thread;
-use std::sync::Arc;
 use crossbeam_deque::{Worker, Stealer, Steal};
 use crate::content::{Content, ContentData, ContentStore};
 use crate::wasm::{WasmRuntime, ModuleInstance};
@@ -279,9 +278,10 @@ impl WorkerThread {
         for subcontent_emission in all_subcontent {
             let subcontent_data = match subcontent_emission.data {
                 SubContentData::Bytes(bytes) => {
-                    let arc_data = Arc::new(bytes);
-                    self.content_store.insert(uuid::Uuid::new_v4(), arc_data.clone());
-                    ContentData::Owned(arc_data)
+                    let buffer = crate::shared_buffer::SharedBuffer::from_vec(bytes);
+                    let uuid = uuid::Uuid::new_v4();
+                    self.content_store.insert(uuid, buffer.clone());
+                    ContentData::Owned(buffer)
                 }
                 SubContentData::Slice { offset, length } => {
                     ContentData::Borrowed {

@@ -158,7 +158,7 @@ impl ModuleInstance {
         // Create a dummy context for initialization
         let dummy_ctx = ProcessingContext::new(
             uuid::Uuid::nil(),
-            Arc::new(Vec::new()),
+            crate::shared_buffer::SharedBuffer::from_vec(Vec::new()),
         );
 
         // Create in-memory filesystem
@@ -827,13 +827,11 @@ impl ModuleInstance {
     pub fn process_content(
         &mut self,
         content_uuid: uuid::Uuid,
-        content_data: Arc<Vec<u8>>,
+        content_data: crate::shared_buffer::SharedBuffer,
     ) -> Result<ProcessingContext> {
-        // Update /data.bin in the in-memory filesystem
+        // Update /data.bin in the in-memory filesystem (zero-copy)
         let filesystem = &self.store.data().wasi_ctx.filesystem;
-        // Remove old file if it exists
-        let _ = filesystem.root().remove("data.bin");
-        filesystem.create_file("/data.bin", content_data.to_vec())?;
+        filesystem.set_data_bin(content_data.to_bytes())?;
 
         // Set up new context
         let ctx = ProcessingContext::new(content_uuid, content_data);

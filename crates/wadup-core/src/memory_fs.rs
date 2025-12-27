@@ -2,71 +2,119 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::sync::Arc;
 use parking_lot::RwLock;
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
+
+/// File data storage - either read-only or read-write
+#[derive(Clone)]
+pub enum MemoryFileData {
+    /// Read-only view (zero-copy reference to content)
+    ReadOnly(Bytes),
+    /// Read-write buffer (for WASM-generated content)
+    ReadWrite(Arc<RwLock<BytesMut>>),
+}
 
 /// In-memory file with Read/Write/Seek support
 #[derive(Clone)]
 pub struct MemoryFile {
-    data: Arc<RwLock<BytesMut>>,
+    data: MemoryFileData,
     position: Arc<RwLock<usize>>,
 }
 
 impl MemoryFile {
     pub fn new() -> Self {
         Self {
-            data: Arc::new(RwLock::new(BytesMut::new())),
+            data: MemoryFileData::ReadWrite(Arc::new(RwLock::new(BytesMut::new()))),
             position: Arc::new(RwLock::new(0)),
         }
     }
 
+    /// Create read-only file from Bytes (zero-copy)
+    pub fn with_readonly_data(data: Bytes) -> Self {
+        Self {
+            data: MemoryFileData::ReadOnly(data),
+            position: Arc::new(RwLock::new(0)),
+        }
+    }
+
+    /// Create read-write file from Vec (takes ownership)
     pub fn with_data(data: Vec<u8>) -> Self {
         Self {
-            data: Arc::new(RwLock::new(BytesMut::from(&data[..]))),
+            data: MemoryFileData::ReadWrite(Arc::new(RwLock::new(BytesMut::from(&data[..])))),
             position: Arc::new(RwLock::new(0)),
         }
     }
 
     pub fn len(&self) -> usize {
-        self.data.read().len()
+        match &self.data {
+            MemoryFileData::ReadOnly(bytes) => bytes.len(),
+            MemoryFileData::ReadWrite(buf) => buf.read().len(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.data.read().is_empty()
+        self.len() == 0
     }
 }
 
 impl Read for MemoryFile {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let data = self.data.read();
         let mut pos = self.position.write();
 
-        if *pos >= data.len() {
-            return Ok(0);
+        match &self.data {
+            MemoryFileData::ReadOnly(bytes) => {
+                if *pos >= bytes.len() {
+                    return Ok(0);
+                }
+
+                let available = bytes.len() - *pos;
+                let to_read = buf.len().min(available);
+                buf[..to_read].copy_from_slice(&bytes[*pos..*pos + to_read]);
+                *pos += to_read;
+
+                Ok(to_read)
+            }
+            MemoryFileData::ReadWrite(data) => {
+                let data_guard = data.read();
+
+                if *pos >= data_guard.len() {
+                    return Ok(0);
+                }
+
+                let available = data_guard.len() - *pos;
+                let to_read = buf.len().min(available);
+                buf[..to_read].copy_from_slice(&data_guard[*pos..*pos + to_read]);
+                *pos += to_read;
+
+                Ok(to_read)
+            }
         }
-
-        let available = data.len() - *pos;
-        let to_read = buf.len().min(available);
-        buf[..to_read].copy_from_slice(&data[*pos..*pos + to_read]);
-        *pos += to_read;
-
-        Ok(to_read)
     }
 }
 
 impl Write for MemoryFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut data = self.data.write();
-        let mut pos = self.position.write();
+        match &self.data {
+            MemoryFileData::ReadOnly(_) => {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "Cannot write to read-only file",
+                ))
+            }
+            MemoryFileData::ReadWrite(data) => {
+                let mut data_guard = data.write();
+                let mut pos = self.position.write();
 
-        // Extend if writing past end
-        if *pos + buf.len() > data.len() {
-            data.resize(*pos + buf.len(), 0);
+                // Extend if writing past end
+                if *pos + buf.len() > data_guard.len() {
+                    data_guard.resize(*pos + buf.len(), 0);
+                }
+
+                data_guard[*pos..*pos + buf.len()].copy_from_slice(buf);
+                *pos += buf.len();
+
+                Ok(buf.len())
+            }
         }
-
-        data[*pos..*pos + buf.len()].copy_from_slice(buf);
-        *pos += buf.len();
-
-        Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -76,7 +124,10 @@ impl Write for MemoryFile {
 
 impl Seek for MemoryFile {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let data_len = self.data.read().len();
+        let data_len = match &self.data {
+            MemoryFileData::ReadOnly(bytes) => bytes.len(),
+            MemoryFileData::ReadWrite(data) => data.read().len(),
+        };
         let mut position = self.position.write();
 
         let new_pos = match pos {
@@ -264,6 +315,20 @@ impl MemoryFilesystem {
 
     pub fn root(&self) -> &MemoryDirectory {
         &self.root
+    }
+
+    /// Create or replace /data.bin with zero-copy view
+    ///
+    /// This method provides a zero-copy way to update the /data.bin file
+    /// used by WASM modules. The Bytes data is stored directly without copying.
+    pub fn set_data_bin(&self, data: Bytes) -> io::Result<()> {
+        // Remove existing /data.bin if it exists
+        let _ = self.root.remove("data.bin");
+
+        // Create new read-only file
+        let mut entries = self.root.entries.write();
+        entries.insert("data.bin".to_string(), Entry::File(MemoryFile::with_readonly_data(data)));
+        Ok(())
     }
 }
 

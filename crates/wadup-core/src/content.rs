@@ -2,6 +2,7 @@ use uuid::Uuid;
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use anyhow::Result;
+use crate::shared_buffer::SharedBuffer;
 
 #[derive(Debug, Clone)]
 pub struct Content {
@@ -14,7 +15,7 @@ pub struct Content {
 
 #[derive(Debug, Clone)]
 pub enum ContentData {
-    Owned(Arc<Vec<u8>>),
+    Owned(SharedBuffer),
     Borrowed {
         parent_uuid: Uuid,
         offset: usize,
@@ -23,10 +24,10 @@ pub enum ContentData {
 }
 
 impl Content {
-    pub fn new_root(data: Vec<u8>, filename: String) -> Self {
+    pub fn new_root(buffer: SharedBuffer, filename: String) -> Self {
         Self {
             uuid: Uuid::new_v4(),
-            data: ContentData::Owned(Arc::new(data)),
+            data: ContentData::Owned(buffer),
             filename,
             parent_uuid: None,
             depth: 0,
@@ -54,7 +55,7 @@ impl Content {
 }
 
 pub struct ContentStore {
-    store: Arc<RwLock<HashMap<Uuid, Arc<Vec<u8>>>>>,
+    store: Arc<RwLock<HashMap<Uuid, SharedBuffer>>>,
 }
 
 impl ContentStore {
@@ -64,21 +65,25 @@ impl ContentStore {
         }
     }
 
-    pub fn insert(&self, uuid: Uuid, data: Arc<Vec<u8>>) {
-        self.store.write().unwrap().insert(uuid, data);
+    pub fn insert(&self, uuid: Uuid, buffer: SharedBuffer) {
+        self.store.write().unwrap().insert(uuid, buffer);
     }
 
-    pub fn get(&self, uuid: &Uuid) -> Option<Arc<Vec<u8>>> {
+    pub fn get(&self, uuid: &Uuid) -> Option<SharedBuffer> {
         self.store.read().unwrap().get(uuid).cloned()
     }
 
-    pub fn resolve(&self, content: &Content) -> Option<Arc<Vec<u8>>> {
+    /// Resolve content to a SharedBuffer
+    ///
+    /// For owned content, returns a cheap clone of the buffer.
+    /// For borrowed content, creates a zero-copy slice of the parent buffer.
+    pub fn resolve(&self, content: &Content) -> Option<SharedBuffer> {
         match &content.data {
-            ContentData::Owned(data) => Some(data.clone()),
+            ContentData::Owned(buffer) => Some(buffer.clone()),
             ContentData::Borrowed { parent_uuid, offset, length } => {
-                let parent_data = self.get(parent_uuid)?;
-                let slice = parent_data[*offset..*offset+*length].to_vec();
-                Some(Arc::new(slice))
+                let parent_buffer = self.get(parent_uuid)?;
+                // Zero-copy slice via Bytes::slice()
+                Some(parent_buffer.slice(*offset..*offset + *length))
             }
         }
     }
