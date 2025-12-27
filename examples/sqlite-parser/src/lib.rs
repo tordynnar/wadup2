@@ -1,5 +1,5 @@
 use wadup_guest::*;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use rusqlite::Connection;
 
 #[no_mangle]
@@ -11,23 +11,17 @@ pub extern "C" fn process() -> i32 {
 }
 
 fn run() -> Result<(), String> {
-    let mut reader = Content::reader();
-
-    // Check if this is a SQLite database
-    if !is_sqlite_database(&mut reader)? {
+    // Check if this is a SQLite database by reading the header
+    if !is_sqlite_database()? {
         return Ok(());
     }
 
-    // Read entire database into memory
-    reader.seek(SeekFrom::Start(0))
-        .map_err(|e| format!("Failed to seek: {}", e))?;
+    // Open the database directly from the virtual filesystem
+    let conn = Connection::open(Content::path())
+        .map_err(|e| format!("Failed to open database: {}", e))?;
 
-    let mut db_bytes = Vec::new();
-    reader.read_to_end(&mut db_bytes)
-        .map_err(|e| format!("Failed to read database: {}", e))?;
-
-    // Query the database using rusqlite
-    let stats = query_database(&db_bytes)?;
+    // Query the database for table statistics
+    let stats = execute_queries(&conn)?;
 
     // Define our metadata table
     let table = TableBuilder::new("db_table_stats")
@@ -46,41 +40,15 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn is_sqlite_database(reader: &mut ContentReader) -> Result<bool, String> {
-    reader.seek(SeekFrom::Start(0))
-        .map_err(|e| format!("Failed to seek: {}", e))?;
+fn is_sqlite_database() -> Result<bool, String> {
+    let mut file = std::fs::File::open(Content::path())
+        .map_err(|e| format!("Failed to open content file: {}", e))?;
 
     let mut header = [0u8; 16];
-    reader.read_exact(&mut header)
+    file.read_exact(&mut header)
         .map_err(|_| "File too small to be SQLite database".to_string())?;
 
     Ok(&header == b"SQLite format 3\0")
-}
-
-fn query_database(db_bytes: &[u8]) -> Result<Vec<(String, i64)>, String> {
-    // For WASM with WASI, we can write the bytes to a temporary file and open it
-    use std::io::Write;
-
-    // Write to a temp file
-    let temp_path = "/tmp/temp_db.sqlite";
-    let mut file = std::fs::File::create(temp_path)
-        .map_err(|e| format!("Failed to create temp file: {}", e))?;
-
-    file.write_all(db_bytes)
-        .map_err(|e| format!("Failed to write database to temp file: {}", e))?;
-
-    drop(file); // Close the file
-
-    // Open the database
-    let conn = Connection::open(temp_path)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
-
-    let result = execute_queries(&conn);
-
-    // Clean up
-    let _ = std::fs::remove_file(temp_path);
-
-    result
 }
 
 fn execute_queries(conn: &Connection) -> Result<Vec<(String, i64)>, String> {

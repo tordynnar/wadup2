@@ -1,10 +1,11 @@
 use wasmtime::*;
 use wasmtime_wasi::preview1::WasiP1Ctx;
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use wadup_bindings::ProcessingContext;
 use crate::metadata::MetadataStore;
+use std::io::Write;
 
 #[derive(Clone)]
 pub struct ResourceLimits {
@@ -144,6 +145,7 @@ pub struct ModuleInstance {
     fuel_limit: Option<u64>,
     metadata_store: MetadataStore,
     _limiter: Option<Box<ResourceLimiterImpl>>,
+    vfs_root: PathBuf,  // Virtual filesystem root directory
 }
 
 impl ModuleInstance {
@@ -160,13 +162,25 @@ impl ModuleInstance {
             Arc::new(Vec::new()),
         );
 
-        // Create WASI context for Preview1
+        // Create virtual filesystem root directory
+        let vfs_root = std::env::temp_dir().join(format!("wadup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&vfs_root)?;
+
+        // Create /tmp subdirectory for writable operations
+        let vfs_tmp = vfs_root.join("tmp");
+        std::fs::create_dir_all(&vfs_tmp)?;
+
+        // Create empty data.bin file (will be populated in process_content)
+        let data_file = vfs_root.join("data.bin");
+        std::fs::File::create(&data_file)?;
+
+        // Create WASI context mounting our virtual filesystem as root
         use wasmtime_wasi::{DirPerms, FilePerms};
         let wasi_ctx = wasmtime_wasi::WasiCtxBuilder::new()
             .inherit_stdio()
             .preopened_dir(
-                "/tmp",
-                "/tmp",
+                &vfs_root,
+                "/",
                 DirPerms::all(),
                 FilePerms::all(),
             )?
@@ -208,6 +222,7 @@ impl ModuleInstance {
             fuel_limit: limits.fuel,
             metadata_store,
             _limiter: _limiter_box,
+            vfs_root,
         })
     }
 
@@ -307,47 +322,6 @@ impl ModuleInstance {
             },
         )?;
 
-        linker.func_wrap(
-            "env",
-            "get_content_size",
-            |caller: Caller<StoreData>| -> i32 {
-                caller.data().processing_ctx.content_data.len() as i32
-            },
-        )?;
-
-        linker.func_wrap(
-            "env",
-            "read_content",
-            |mut caller: Caller<StoreData>, offset: i32, length: i32, dest_ptr: i32| -> Result<i32> {
-                if offset < 0 || length < 0 || dest_ptr < 0 {
-                    anyhow::bail!("Invalid parameters");
-                }
-                let offset = offset as usize;
-                let length = length as usize;
-                let content = caller.data().processing_ctx.content_data.clone();
-                if offset + length > content.len() {
-                    anyhow::bail!("Read out of bounds");
-                }
-                let memory = get_memory(&mut caller)?;
-                memory.write(&mut caller, dest_ptr as usize, &content[offset..offset+length])?;
-                Ok(0)
-            },
-        )?;
-
-        linker.func_wrap(
-            "env",
-            "get_content_uuid",
-            |mut caller: Caller<StoreData>, dest_ptr: i32| -> Result<i32> {
-                if dest_ptr < 0 {
-                    anyhow::bail!("Invalid pointer");
-                }
-                let uuid_bytes = *caller.data().processing_ctx.content_uuid.as_bytes();
-                let memory = get_memory(&mut caller)?;
-                memory.write(&mut caller, dest_ptr as usize, &uuid_bytes)?;
-                Ok(0)
-            },
-        )?;
-
         Ok(())
     }
 
@@ -356,6 +330,12 @@ impl ModuleInstance {
         content_uuid: uuid::Uuid,
         content_data: Arc<Vec<u8>>,
     ) -> Result<ProcessingContext> {
+        // Write content data to virtual filesystem at /data.bin
+        let data_file_path = self.vfs_root.join("data.bin");
+        let mut file = std::fs::File::create(&data_file_path)?;
+        file.write_all(&content_data)?;
+        drop(file);  // Ensure file is closed before WASM accesses it
+
         // Set up new context
         let ctx = ProcessingContext::new(content_uuid, content_data);
         self.store.data_mut().processing_ctx = ctx;
@@ -409,5 +389,16 @@ impl ModuleInstance {
 
     pub fn metadata_store(&self) -> &MetadataStore {
         &self.metadata_store
+    }
+}
+
+impl Drop for ModuleInstance {
+    fn drop(&mut self) {
+        // Clean up virtual filesystem directory
+        if self.vfs_root.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&self.vfs_root) {
+                tracing::warn!("Failed to clean up VFS directory {:?}: {}", self.vfs_root, e);
+            }
+        }
     }
 }

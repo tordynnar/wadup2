@@ -16,8 +16,10 @@ fn run() -> Result<(), String> {
         .column("size_bytes", DataType::Int64)
         .build()?;
 
-    // Get content size
-    let size = Content::size() as i64;
+    // Get content size from the virtual filesystem
+    let metadata = std::fs::metadata(Content::path())
+        .map_err(|e| format!("Failed to get content metadata: {}", e))?;
+    let size = metadata.len() as i64;
 
     // Insert the size
     table.insert(&[Value::Int64(size)])?;

@@ -14,7 +14,7 @@ This example demonstrates how to:
 
 The sqlite-parser module:
 1. Detects if a file is a SQLite database by checking the header
-2. Reads the database into memory
+2. Opens the database directly from the virtual filesystem at `/data.bin`
 3. Uses `rusqlite` to execute SQL queries:
    - Queries `sqlite_master` to find all user tables
    - Executes `COUNT(*)` queries to get row counts for each table
@@ -105,7 +105,11 @@ This is configured in:
 
 ### File System Access
 
-The module writes the database to `/tmp/temp_db.sqlite` temporarily. The WADUP runtime pre-opens the `/tmp` directory with read/write permissions for WASI modules, allowing this temporary file creation.
+The module opens the database directly from `/data.bin` in the virtual filesystem. The WADUP runtime creates a sandboxed virtual filesystem for each module invocation where:
+- `/data.bin` contains the content being processed (read-only)
+- `/tmp/` is available for temporary file creation (read-write)
+
+This eliminates the need to copy database content to a temporary file, improving both performance and memory efficiency.
 
 ## Dependencies
 

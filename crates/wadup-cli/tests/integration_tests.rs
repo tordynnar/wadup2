@@ -17,13 +17,9 @@ fn wadup_binary() -> PathBuf {
     path
 }
 
-fn get_wasm_target(example_name: &str) -> &'static str {
-    // sqlite-parser needs WASI for rusqlite
-    if example_name == "sqlite-parser" {
-        "wasm32-wasip1"
-    } else {
-        "wasm32-unknown-unknown"
-    }
+fn get_wasm_target(_example_name: &str) -> &'static str {
+    // All modules now use WASI filesystem to access /data.bin
+    "wasm32-wasip1"
 }
 
 fn build_wasm_module(example_name: &str) -> PathBuf {

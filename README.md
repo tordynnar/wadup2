@@ -39,7 +39,15 @@ wadup \
 
 ## Writing WASM Modules
 
-WADUP modules are written in Rust and compiled to `wasm32-unknown-unknown`.
+WADUP modules are written in Rust and compiled to `wasm32-wasip1` (WASI target).
+
+### Virtual Filesystem
+
+Each WASM module runs in a sandboxed virtual filesystem where:
+- **`/data.bin`** - The content being processed (read-only)
+- **`/tmp/`** - Available for temporary files (read-write)
+
+Modules can access content using standard file I/O operations.
 
 ### Example: File Size Counter
 
@@ -60,8 +68,12 @@ fn run() -> Result<(), String> {
         .column("size_bytes", DataType::Int64)
         .build()?;
 
-    // Get content size and insert into database
-    let size = Content::size() as i64;
+    // Get content size from the virtual filesystem
+    let metadata = std::fs::metadata(Content::path())
+        .map_err(|e| format!("Failed to get metadata: {}", e))?;
+    let size = metadata.len() as i64;
+
+    // Insert into database
     table.insert(&[Value::Int64(size)])?;
 
     Ok(())
@@ -78,11 +90,14 @@ crate-type = ["cdylib"]
 [dependencies]
 wadup-guest = { path = "../../crates/wadup-guest" }
 
-# Build
-cargo build --target wasm32-unknown-unknown --release
+# Build (requires WASI target)
+rustup target add wasm32-wasip1
+cargo build --target wasm32-wasip1 --release
 ```
 
 The compiled `.wasm` file can then be placed in your modules directory.
+
+**Note**: For modules that use C dependencies (like `rusqlite`), you'll need the WASI SDK. See the [sqlite-parser example](examples/sqlite-parser/README.md) for details.
 
 ## CLI Options
 
@@ -146,21 +161,30 @@ Command-line interface for running WADUP processing jobs.
 
 ### Content Access
 
+Content is accessible as a file in the virtual filesystem:
+
 ```rust
+use std::fs::File;
+use std::io::Read;
+
+// Get the content file path
+let path = Content::path();  // Returns "/data.bin"
+
 // Get content size
-let size = Content::size();
+let metadata = std::fs::metadata(path)?;
+let size = metadata.len();
 
 // Read entire content
-let data = Content::read_all()?;
+let mut file = File::open(path)?;
+let mut data = Vec::new();
+file.read_to_end(&mut data)?;
 
 // Read content as UTF-8 string
-let text = Content::read_string()?;
+let text = std::fs::read_to_string(path)?;
 
-// Read specific range
-let chunk = Content::read(offset, length)?;
-
-// Get content UUID
-let uuid = Content::uuid()?;
+// Use with other file readers (e.g., ZIP, SQLite)
+let file = File::open(path)?;
+let archive = zip::ZipArchive::new(file)?;
 ```
 
 ### Metadata Tables
@@ -221,7 +245,9 @@ See the `examples/` directory for working WASM modules:
 
 - **byte-counter**: Counts and records file sizes
 - **zip-extractor**: Extracts files from ZIP archives
-- **sqlite-parser**: Parses SQLite databases using SQL queries (requires WASI)
+- **sqlite-parser**: Parses SQLite databases using SQL queries
+
+All examples use the WASI target (`wasm32-wasip1`) to access the virtual filesystem.
 
 ### Building the SQLite Parser Example
 
@@ -244,7 +270,8 @@ See [examples/sqlite-parser/README.md](examples/sqlite-parser/README.md) for det
 ### Prerequisites
 
 - Rust 1.70+
-- wasm32-unknown-unknown target: `rustup target add wasm32-unknown-unknown`
+- wasm32-wasip1 target: `rustup target add wasm32-wasip1`
+- WASI SDK (for modules with C dependencies): See [sqlite-parser README](examples/sqlite-parser/README.md)
 
 ### Building
 
@@ -254,10 +281,14 @@ cargo build --release
 
 # Build example modules
 cd examples/byte-counter
-cargo build --target wasm32-unknown-unknown --release
+cargo build --target wasm32-wasip1 --release
 
-cd ../simple-test
-cargo build --target wasm32-unknown-unknown --release
+cd ../zip-extractor
+cargo build --target wasm32-wasip1 --release
+
+# For sqlite-parser, use the build script
+cd ../sqlite-parser
+./build.sh
 ```
 
 ### Testing
@@ -266,7 +297,7 @@ cargo build --target wasm32-unknown-unknown --release
 # Run the framework on test data
 mkdir -p test-modules test-input
 
-cp examples/byte-counter/target/wasm32-unknown-unknown/release/byte_counter.wasm test-modules/
+cp examples/byte-counter/target/wasm32-wasip1/release/byte_counter.wasm test-modules/
 echo "Hello, WADUP!" > test-input/test.txt
 
 ./target/release/wadup \
@@ -276,6 +307,9 @@ echo "Hello, WADUP!" > test-input/test.txt
 
 # Query results
 sqlite3 test.db "SELECT * FROM file_sizes"
+
+# Run integration tests
+cargo test --release --test integration_tests
 ```
 
 ## Design Documents

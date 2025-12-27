@@ -10,10 +10,12 @@ pub extern "C" fn process() -> i32 {
 }
 
 fn run() -> Result<(), String> {
-    let reader = Content::reader();
+    // Open content file from virtual filesystem
+    let file = std::fs::File::open(Content::path())
+        .map_err(|e| format!("Failed to open content file: {}", e))?;
 
     // Try to parse as ZIP
-    let mut archive = match zip::ZipArchive::new(reader) {
+    let mut archive = match zip::ZipArchive::new(file) {
         Ok(archive) => archive,
         Err(_) => {
             // Not a ZIP file, skip processing

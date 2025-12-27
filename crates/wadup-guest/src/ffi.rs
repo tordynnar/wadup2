@@ -29,14 +29,4 @@ extern "C" {
         filename_ptr: *const u8,
         filename_len: usize,
     ) -> i32;
-
-    pub fn get_content_size() -> usize;
-
-    pub fn read_content(
-        offset: usize,
-        length: usize,
-        dest_ptr: *mut u8,
-    ) -> i32;
-
-    pub fn get_content_uuid(dest_ptr: *mut u8) -> i32;
 }
