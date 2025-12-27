@@ -12,6 +12,8 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 wasmtime = "26"
 wasmtime-wasi = "26"
+bytes = "1.5"
+parking_lot = "0.12"
 rusqlite = { version = "0.32", features = ["bundled"] }
 crossbeam = "0.8"
 crossbeam-deque = "0.8"
