@@ -7,6 +7,11 @@ Cargo.lock
 examples/*/target/
 examples/*/Cargo.lock
 
+# Python WASM module build artifacts
+examples/python-sqlite-parser/python-wasi/
+examples/python-sqlite-parser/src/*.o
+examples/python-sqlite-parser/src/script.py.h
+
 # Test outputs
 test-output.db
 test-output.db-shm

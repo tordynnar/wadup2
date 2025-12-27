@@ -263,6 +263,53 @@ impl ModuleInstance {
             },
         )?;
 
+        // fd_pwrite - Write to file descriptor at offset
+        linker.func_wrap(
+            "wasi_snapshot_preview1",
+            "fd_pwrite",
+            |mut caller: Caller<StoreData>, fd: i32, iovs_ptr: i32, iovs_len: i32, offset: i64, nwritten_ptr: i32| -> Result<i32> {
+                let memory = get_memory(&mut caller)?;
+
+                // Save current position
+                let mut current_pos = 0u64;
+                let _ = caller.data().wasi_ctx.fd_seek(fd as u32, 0, 1, &mut current_pos); // SEEK_CUR = 1
+
+                // Seek to offset
+                let mut _new_offset = 0u64;
+                let errno = caller.data().wasi_ctx.fd_seek(fd as u32, offset, 0, &mut _new_offset); // SEEK_SET = 0
+                if errno != Errno::Success {
+                    return Ok(errno as i32);
+                }
+
+                // Read iovec array
+                let mut bufs = Vec::new();
+                for i in 0..iovs_len {
+                    let iov_ptr = iovs_ptr + (i * 8);
+                    let mut iov_buf = [0u8; 8];
+                    memory.read(&caller, iov_ptr as usize, &mut iov_buf)?;
+
+                    let buf_ptr = u32::from_le_bytes([iov_buf[0], iov_buf[1], iov_buf[2], iov_buf[3]]);
+                    let buf_len = u32::from_le_bytes([iov_buf[4], iov_buf[5], iov_buf[6], iov_buf[7]]);
+
+                    let mut buf = vec![0u8; buf_len as usize];
+                    memory.read(&caller, buf_ptr as usize, &mut buf)?;
+                    bufs.push(buf);
+                }
+
+                let buf_refs: Vec<&[u8]> = bufs.iter().map(|b| b.as_slice()).collect();
+                let mut nwritten = 0;
+                let write_errno = caller.data().wasi_ctx.fd_write(fd as u32, &buf_refs, &mut nwritten);
+
+                // Write result
+                memory.write(&mut caller, nwritten_ptr as usize, &(nwritten as i32).to_le_bytes())?;
+
+                // Restore original position
+                let _ = caller.data().wasi_ctx.fd_seek(fd as u32, current_pos as i64, 0, &mut _new_offset); // SEEK_SET = 0
+
+                Ok(write_errno as i32)
+            },
+        )?;
+
         // fd_read - Read from file descriptor
         linker.func_wrap(
             "wasi_snapshot_preview1",
@@ -301,6 +348,61 @@ impl ModuleInstance {
                 memory.write(&mut caller, nread_ptr as usize, &(total_read as i32).to_le_bytes())?;
 
                 Ok(errno as i32)
+            },
+        )?;
+
+        // fd_pread - Read from file descriptor at offset
+        linker.func_wrap(
+            "wasi_snapshot_preview1",
+            "fd_pread",
+            |mut caller: Caller<StoreData>, fd: i32, iovs_ptr: i32, iovs_len: i32, offset: i64, nread_ptr: i32| -> Result<i32> {
+                let memory = get_memory(&mut caller)?;
+
+                // Save current position
+                let mut current_pos = 0u64;
+                let _ = caller.data().wasi_ctx.fd_seek(fd as u32, 0, 1, &mut current_pos); // SEEK_CUR = 1
+
+                // Seek to offset
+                let mut _new_offset = 0u64;
+                let errno = caller.data().wasi_ctx.fd_seek(fd as u32, offset, 0, &mut _new_offset); // SEEK_SET = 0
+                if errno != Errno::Success {
+                    return Ok(errno as i32);
+                }
+
+                // Read iovec array and prepare buffers
+                let mut iov_info = Vec::new();
+                for i in 0..iovs_len {
+                    let iov_ptr = iovs_ptr + (i * 8);
+                    let mut iov_buf = [0u8; 8];
+                    memory.read(&caller, iov_ptr as usize, &mut iov_buf)?;
+
+                    let buf_ptr = u32::from_le_bytes([iov_buf[0], iov_buf[1], iov_buf[2], iov_buf[3]]);
+                    let buf_len = u32::from_le_bytes([iov_buf[4], iov_buf[5], iov_buf[6], iov_buf[7]]);
+                    iov_info.push((buf_ptr, buf_len));
+                }
+
+                let mut total_read = 0;
+                let mut temp_bufs: Vec<Vec<u8>> = iov_info.iter().map(|(_, len)| vec![0u8; *len as usize]).collect();
+                let mut buf_refs: Vec<&mut [u8]> = temp_bufs.iter_mut().map(|b| b.as_mut_slice()).collect();
+
+                let read_errno = caller.data().wasi_ctx.fd_read(fd as u32, &mut buf_refs, &mut total_read);
+
+                // Write buffers back to guest memory
+                let mut write_offset = 0;
+                for (i, (buf_ptr, buf_len)) in iov_info.iter().enumerate() {
+                    let to_write = (total_read - write_offset).min(*buf_len as usize);
+                    if to_write > 0 {
+                        memory.write(&mut caller, *buf_ptr as usize, &temp_bufs[i][..to_write])?;
+                        write_offset += to_write;
+                    }
+                }
+
+                memory.write(&mut caller, nread_ptr as usize, &(total_read as i32).to_le_bytes())?;
+
+                // Restore original position
+                let _ = caller.data().wasi_ctx.fd_seek(fd as u32, current_pos as i64, 0, &mut _new_offset); // SEEK_SET = 0
+
+                Ok(read_errno as i32)
             },
         )?;
 
@@ -464,6 +566,19 @@ impl ModuleInstance {
             },
         )?;
 
+        // clock_res_get - Get clock resolution
+        linker.func_wrap(
+            "wasi_snapshot_preview1",
+            "clock_res_get",
+            |mut caller: Caller<StoreData>, _clock_id: i32, resolution_ptr: i32| -> Result<i32> {
+                let memory = get_memory(&mut caller)?;
+                // Return 1 nanosecond resolution
+                let resolution: i64 = 1;
+                memory.write(&mut caller, resolution_ptr as usize, &resolution.to_le_bytes())?;
+                Ok(Errno::Success as i32)
+            },
+        )?;
+
         // random_get - Get random bytes
         linker.func_wrap(
             "wasi_snapshot_preview1",
@@ -623,6 +738,16 @@ impl ModuleInstance {
             },
         )?;
 
+        // path_link - Create hard link
+        linker.func_wrap(
+            "wasi_snapshot_preview1",
+            "path_link",
+            |_caller: Caller<StoreData>, _old_dirfd: i32, _old_flags: i32, _old_path_ptr: i32, _old_path_len: i32, _new_dirfd: i32, _new_path_ptr: i32, _new_path_len: i32| -> Result<i32> {
+                // Not supported in WASI - return ENOSYS
+                Ok(Errno::Nosys as i32)
+            },
+        )?;
+
         // path_symlink - Create symlink
         linker.func_wrap(
             "wasi_snapshot_preview1",
@@ -709,6 +834,15 @@ impl ModuleInstance {
             "wasi_snapshot_preview1",
             "sock_send",
             |_caller: Caller<StoreData>, _fd: i32, _si_data_ptr: i32, _si_data_len: i32, _si_flags: i32, _so_datalen_ptr: i32| -> Result<i32> {
+                Ok(Errno::Nosys as i32)
+            },
+        )?;
+
+        // sock_accept - Accept socket connection
+        linker.func_wrap(
+            "wasi_snapshot_preview1",
+            "sock_accept",
+            |_caller: Caller<StoreData>, _fd: i32, _flags: i32, _connection_fd_ptr: i32| -> Result<i32> {
                 Ok(Errno::Nosys as i32)
             },
         )?;
