@@ -2,7 +2,7 @@ use wasmtime::*;
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
-use wadup_bindings::ProcessingContext;
+use crate::bindings_context::ProcessingContext;
 use crate::metadata::MetadataStore;
 use crate::memory_fs::MemoryFilesystem;
 use crate::wasi_impl::WasiCtx;
@@ -726,8 +726,8 @@ impl ModuleInstance {
     }
 
     fn add_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
-        use wadup_bindings::context::{MetadataRow, SubContentEmission, SubContentData};
-        use wadup_bindings::types::{Column, Value, TableSchema};
+        use crate::bindings_context::{MetadataRow, SubContentEmission, SubContentData};
+        use crate::bindings_types::{Column, Value, TableSchema};
 
         // Helper to get memory
         fn get_memory<T>(caller: &mut Caller<T>) -> Result<Memory> {

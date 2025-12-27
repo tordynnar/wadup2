@@ -1,6 +1,6 @@
 use uuid::Uuid;
 use std::sync::Arc;
-use crate::types::{Value, TableSchema};
+use crate::bindings_types::{Value, TableSchema};
 
 pub struct ProcessingContext {
     pub content_uuid: Uuid,

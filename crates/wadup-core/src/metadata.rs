@@ -2,7 +2,7 @@ use rusqlite::{Connection, params};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use anyhow::Result;
-use wadup_bindings::{TableSchema, DataType, Value};
+use crate::bindings_types::{TableSchema, DataType, Value};
 
 pub struct MetadataStore {
     conn: Arc<Mutex<Connection>>,

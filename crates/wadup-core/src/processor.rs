@@ -5,7 +5,7 @@ use crossbeam_deque::{Worker, Stealer, Steal};
 use crate::content::{Content, ContentData, ContentStore};
 use crate::wasm::{WasmRuntime, ModuleInstance};
 use crate::metadata::MetadataStore;
-use wadup_bindings::SubContentData;
+use crate::bindings_context::SubContentData;
 
 pub struct ContentProcessor {
     runtime: WasmRuntime,

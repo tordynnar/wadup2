@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/wadup-core",
-    "crates/wadup-bindings",
     "crates/wadup-guest",
     "crates/wadup-cli",
 ]
