@@ -239,16 +239,22 @@ Module-defined tables use `content_uuid` as a foreign key to `__wadup_content.uu
 
 See the `examples/` directory for working WASM modules:
 
-- **byte-counter**: Counts and records file sizes
-- **zip-extractor**: Extracts files from ZIP archives
-- **sqlite-parser**: Parses SQLite databases using SQL queries
+- **byte-counter**: Counts and records file sizes (Rust)
+- **zip-extractor**: Extracts files from ZIP archives (Rust)
+- **sqlite-parser**: Parses SQLite databases using SQL queries (Rust)
+- **python-sqlite-parser**: Parses SQLite databases using CPython 3.13.7 (Python)
 
 All examples use the WASI target (`wasm32-wasip1`) to access the virtual filesystem.
 
-### Building the SQLite Parser Example
+### Building Examples
 
-The sqlite-parser example requires the WASI SDK to compile SQLite's C code to WebAssembly. Use the provided build script:
+**Rust Examples** (byte-counter, zip-extractor):
+```bash
+cd examples/byte-counter
+cargo build --target wasm32-wasip1 --release
+```
 
+**SQLite Parser** (Rust with C dependencies):
 ```bash
 cd examples/sqlite-parser
 ./build.sh
@@ -260,6 +266,20 @@ The build script will automatically:
 - Build the module for wasm32-wasip1 target
 
 See [examples/sqlite-parser/README.md](examples/sqlite-parser/README.md) for detailed documentation.
+
+**Python SQLite Parser** (CPython 3.13.7):
+```bash
+cd examples/python-sqlite-parser
+./build.sh
+```
+
+This is a more complex build that:
+- Downloads and compiles CPython 3.13.7 for WASI (~5-10 minute build)
+- Builds SQLite 3.45.1 for WASI
+- Freezes Python stdlib modules into the binary
+- Creates a self-contained ~26MB WASM module
+
+See [examples/python-sqlite-parser/README.md](examples/python-sqlite-parser/README.md) for complete documentation, architecture details, and troubleshooting.
 
 ## Development
 
@@ -307,12 +327,6 @@ sqlite3 test.db "SELECT * FROM file_sizes"
 # Run integration tests
 cargo test --release --test integration_tests
 ```
-
-## Design Documents
-
-- [DESIGN.md](DESIGN.md) - Original design specification
-- [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md) - Complete system architecture
-- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) - Phased implementation guide
 
 ## License
 
