@@ -41,11 +41,16 @@ pub enum Errno {
 
 /// Open file handle
 enum FileHandle {
-    File(MemoryFile),
+    File(MemoryFile, Option<String>), // file + optional path for tracking
     Directory(MemoryDirectory, usize), // directory + readdir position
     Stdin,
     Stdout,
     Stderr,
+}
+
+/// Result of closing a file - may contain metadata if it was a /metadata/*.json file
+pub struct CloseResult {
+    pub metadata_content: Option<Vec<u8>>,
 }
 
 /// WASI context with in-memory filesystem
@@ -108,6 +113,9 @@ impl WasiCtx {
         let o_excl = (oflags & 4) != 0;
         let _o_trunc = (oflags & 8) != 0; // TODO: implement truncation
 
+        // Normalize the path for tracking
+        let normalized_path = format!("/{}", path.trim_start_matches('/'));
+
         // If O_DIRECTORY is set, only open as directory
         if o_directory {
             let (parent_dir, filename) = match self.resolve_path(path) {
@@ -133,7 +141,13 @@ impl WasiCtx {
                         return Errno::Exist;
                     }
                     let new_fd = self.allocate_fd();
-                    self.file_table.write().insert(new_fd, FileHandle::File(file));
+                    // Track path for metadata files
+                    let track_path = if normalized_path.starts_with("/metadata/") {
+                        Some(normalized_path.clone())
+                    } else {
+                        None
+                    };
+                    self.file_table.write().insert(new_fd, FileHandle::File(file, track_path));
                     *fd_out = new_fd;
                     Errno::Success
                 }
@@ -146,7 +160,13 @@ impl WasiCtx {
                                 match self.filesystem.open_file(path) {
                                     Ok(file) => {
                                         let new_fd = self.allocate_fd();
-                                        self.file_table.write().insert(new_fd, FileHandle::File(file));
+                                        // Track path for metadata files
+                                        let track_path = if normalized_path.starts_with("/metadata/") {
+                                            Some(normalized_path.clone())
+                                        } else {
+                                            None
+                                        };
+                                        self.file_table.write().insert(new_fd, FileHandle::File(file, track_path));
                                         *fd_out = new_fd;
                                         Errno::Success
                                     }
@@ -187,7 +207,7 @@ impl WasiCtx {
         };
 
         match handle {
-            FileHandle::File(ref mut file) => {
+            FileHandle::File(ref mut file, _) => {
                 let mut total = 0;
                 for buf in bufs {
                     match file.read(buf) {
@@ -217,7 +237,7 @@ impl WasiCtx {
         };
 
         match handle {
-            FileHandle::File(ref mut file) => {
+            FileHandle::File(ref mut file, _) => {
                 let mut total = 0;
                 for buf in bufs {
                     match file.write(buf) {
@@ -260,7 +280,7 @@ impl WasiCtx {
             None => return Errno::Badf,
         };
 
-        if let FileHandle::File(ref mut file) = handle {
+        if let FileHandle::File(ref mut file, _) = handle {
             let seek_from = match whence {
                 0 => SeekFrom::Start(offset as u64),
                 1 => SeekFrom::Current(offset),
@@ -281,17 +301,31 @@ impl WasiCtx {
     }
 
     /// fd_close - Close file descriptor
-    pub fn fd_close(&self, fd: Fd) -> Errno {
+    /// Returns CloseResult with metadata content if this was a /metadata/*.json file
+    pub fn fd_close(&self, fd: Fd) -> (Errno, CloseResult) {
         if fd <= 2 {
             // Don't close stdio
-            return Errno::Success;
+            return (Errno::Success, CloseResult { metadata_content: None });
         }
 
         let mut file_table = self.file_table.write();
-        if file_table.remove(&fd).is_some() {
-            Errno::Success
-        } else {
-            Errno::Badf
+        match file_table.remove(&fd) {
+            Some(FileHandle::File(_, Some(path))) if path.starts_with("/metadata/") && path.ends_with(".json") => {
+                // This is a metadata file - read its contents and delete it
+                let content = match self.filesystem.read_file(&path) {
+                    Ok(data) => Some(data),
+                    Err(_) => None,
+                };
+
+                // Delete the file from the filesystem
+                if let Ok((parent_dir, filename)) = self.resolve_path(&path) {
+                    let _ = parent_dir.remove(&filename);
+                }
+
+                (Errno::Success, CloseResult { metadata_content: content })
+            }
+            Some(_) => (Errno::Success, CloseResult { metadata_content: None }),
+            None => (Errno::Badf, CloseResult { metadata_content: None }),
         }
     }
 
@@ -308,7 +342,7 @@ impl WasiCtx {
         filestat.fill(0);
 
         match handle {
-            FileHandle::File(file) => {
+            FileHandle::File(file, _) => {
                 // Set filetype to regular file (byte 16)
                 filestat[16] = Filetype::RegularFile as u8;
                 // Set file size (bytes 32-39, little endian)

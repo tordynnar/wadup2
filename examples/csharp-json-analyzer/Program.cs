@@ -31,8 +31,9 @@ public class Program
             return;
         }
 
-        // Define output table
-        var table = new TableBuilder("json_metadata")
+        // Define the main metadata table and flush immediately
+        // This demonstrates that WADUP reads metadata when the file is closed
+        var metadataTable = new TableBuilder("json_metadata")
             .AddColumn("max_depth", DataType.Int64)
             .AddColumn("total_keys", DataType.Int64)
             .AddColumn("unique_keys", DataType.Int64)
@@ -42,8 +43,8 @@ public class Program
             .AddColumn("size_bytes", DataType.Int64)
             .Build();
 
-        // Insert metadata row
-        table.InsertRow(
+        // Insert main metadata row and flush (first flush)
+        metadataTable.InsertRow(
             Value.FromInt64(metadata.MaxDepth),
             Value.FromInt64(metadata.TotalKeys),
             Value.FromInt64(metadata.UniqueKeys),
@@ -52,10 +53,31 @@ public class Program
             Value.FromString(metadata.ParserUsed),
             Value.FromInt64(metadata.SizeBytes)
         );
-
-        // Flush metadata to /metadata directory
         MetadataWriter.Flush();
-        Console.Error.WriteLine("DEBUG: Metadata written successfully");
+        Console.Error.WriteLine("C#: Flushed metadata row 1 (main analysis)");
+
+        // Define a second table for detailed key analysis
+        var keysTable = new TableBuilder("json_keys")
+            .AddColumn("key_name", DataType.String)
+            .AddColumn("occurrence_count", DataType.Int64)
+            .Build();
+
+        // Insert rows for each unique key found, flushing after each batch
+        // This demonstrates multiple incremental flushes
+        var keys = analyzer.GetUniqueKeys();
+        int batchNum = 2;
+        foreach (var key in keys)
+        {
+            keysTable.InsertRow(
+                Value.FromString(key.Key),
+                Value.FromInt64(key.Value)
+            );
+            MetadataWriter.Flush();
+            Console.Error.WriteLine($"C#: Flushed metadata row {batchNum} (key: {key.Key})");
+            batchNum++;
+        }
+
+        Console.Error.WriteLine($"C#: All {batchNum - 1} metadata flushes complete");
     }
 
     // Main entry point - returns int for WASM compatibility

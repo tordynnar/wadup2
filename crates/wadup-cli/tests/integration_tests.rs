@@ -676,29 +676,58 @@ fn test_csharp_json_analyzer() {
     let output_dir = tempfile::tempdir().unwrap();
     let output_db = output_dir.path().join("output.db");
 
-    // Run wadup
-    let status = Command::new(wadup_binary())
+    // Run wadup and capture stderr to verify incremental metadata processing
+    let output = Command::new(wadup_binary())
         .args(&[
             "--modules", modules_dir.path().to_str().unwrap(),
             "--input", input_dir.path().to_str().unwrap(),
             "--output", output_db.to_str().unwrap(),
         ])
-        .status()
+        .output()
         .expect("Failed to run wadup");
 
-    assert!(status.success(), "wadup execution failed");
+    assert!(output.status.success(), "wadup execution failed");
 
-    // Verify results
+    // Check stderr for debug output showing metadata processed on fd_close
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    println!("=== WADUP stderr output ===\n{}", stderr);
+
+    // Verify metadata is processed on fd_close (before _start completes)
+    // The pattern should be: "WADUP: Processing metadata on fd_close" appears multiple times
+    // BEFORE the final "WADUP: _start completed" message
+    let fd_close_count = stderr.matches("WADUP: Processing metadata on fd_close").count();
+    let start_completed_count = stderr.matches("WADUP: _start completed").count();
+
+    assert!(fd_close_count >= 5,
+        "Expected at least 5 metadata files processed on fd_close, got {}. \
+         This verifies incremental metadata processing.", fd_close_count);
+
+    // Verify the order: fd_close processing should happen BEFORE _start completes
+    // Find the position of the first "_start completed" after all fd_close messages
+    let last_fd_close_pos = stderr.rfind("WADUP: Processing metadata on fd_close")
+        .expect("Should have fd_close processing messages");
+    let first_start_after_processing = stderr[last_fd_close_pos..].find("WADUP: _start completed");
+    assert!(first_start_after_processing.is_some(),
+        "_start completed should appear after the last fd_close processing");
+
+    // Verify results in database
     let conn = rusqlite::Connection::open(&output_db).unwrap();
 
-    // Check that json_metadata table exists
-    let table_exists: bool = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='json_metadata'",
+    // Check that json_metadata table exists and has data
+    let json_metadata_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM json_metadata",
         [],
-        |row| row.get::<_, i64>(0)
-    ).unwrap() > 0;
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(json_metadata_count, 1, "Expected 1 row in json_metadata");
 
-    assert!(table_exists, "json_metadata table not created");
+    // Check that json_keys table exists and has all 4 keys
+    let json_keys_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM json_keys",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(json_keys_count, 4, "Expected 4 rows in json_keys (name, values, nested, a)");
 
     // Get the metadata row
     let (max_depth, total_keys, total_arrays, total_objects, parser_used): (i64, i64, i64, i64, String) = conn.query_row(
@@ -708,21 +737,30 @@ fn test_csharp_json_analyzer() {
     ).unwrap();
 
     // Verify the analysis results
-    // JSON: {"name": "test", "values": [1, 2, 3], "nested": {"a": "b"}}
-    // - max_depth: 4 (root -> nested -> a, and root -> values -> array elements)
-    // - total_keys: 4 (name, values, nested, a)
-    // - total_arrays: 1 (values)
-    // - total_objects: 2 (root, nested)
     assert!(max_depth >= 3, "Expected max_depth >= 3, got {}", max_depth);
-    assert!(total_keys >= 3, "Expected total_keys >= 3, got {}", total_keys);
+    assert_eq!(total_keys, 4, "Expected total_keys = 4, got {}", total_keys);
     assert_eq!(total_arrays, 1, "Expected 1 array, got {}", total_arrays);
-    assert!(total_objects >= 1, "Expected at least 1 object, got {}", total_objects);
+    assert_eq!(total_objects, 2, "Expected 2 objects, got {}", total_objects);
     assert_eq!(parser_used, "System.Text.Json", "Expected System.Text.Json parser");
 
+    // Get the keys
+    let mut keys: Vec<String> = conn.prepare("SELECT key_name FROM json_keys ORDER BY key_name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    keys.sort();
+    assert_eq!(keys, vec!["a", "name", "nested", "values"],
+        "Expected keys [a, name, nested, values], got {:?}", keys);
+
     println!("✓ C# JSON analyzer verified:");
+    println!("  - Metadata files processed on fd_close: {}", fd_close_count);
+    println!("  - _start completed count: {}", start_completed_count);
+    println!("  - json_metadata rows: {}", json_metadata_count);
+    println!("  - json_keys rows: {}", json_keys_count);
     println!("  - max_depth: {}", max_depth);
     println!("  - total_keys: {}", total_keys);
-    println!("  - total_arrays: {}", total_arrays);
-    println!("  - total_objects: {}", total_objects);
-    println!("  - parser_used: {}", parser_used);
+    println!("  - Keys: {:?}", keys);
+    println!("✓ Incremental metadata processing verified!");
 }

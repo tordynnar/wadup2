@@ -45,7 +45,7 @@ public class TableBuilder
 
 /// <summary>
 /// Accumulates metadata (table definitions and rows) and writes to /metadata/*.json files.
-/// Call Flush() at the end of processing to ensure all metadata is written.
+/// Call Flush() to write accumulated metadata. WADUP reads and deletes files when they are closed.
 /// </summary>
 public static class MetadataWriter
 {
@@ -76,77 +76,90 @@ public static class MetadataWriter
     }
 
     /// <summary>
-    /// Flush all accumulated metadata to /metadata/output.json.
-    /// Must be called at the end of processing.
+    /// Flush all accumulated metadata to /metadata/output_N.json.
+    /// The file is closed after writing, triggering WADUP to read and delete it immediately.
+    /// Can be called multiple times to write metadata incrementally.
     /// </summary>
     public static void Flush()
     {
         if (_tables.Count == 0 && _rows.Count == 0)
             return;
 
-        using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = false }))
-        {
-            writer.WriteStartObject();
-
-            // Write tables array
-            writer.WritePropertyName("tables");
-            writer.WriteStartArray();
-            foreach (var table in _tables)
-            {
-                writer.WriteStartObject();
-                writer.WriteString("name", table.Name);
-                writer.WritePropertyName("columns");
-                writer.WriteStartArray();
-                foreach (var col in table.Columns)
-                {
-                    writer.WriteStartObject();
-                    writer.WriteString("name", col.Name);
-                    writer.WriteString("data_type", col.DataType.ToString());
-                    writer.WriteEndObject();
-                }
-                writer.WriteEndArray();
-                writer.WriteEndObject();
-            }
-            writer.WriteEndArray();
-
-            // Write rows array
-            writer.WritePropertyName("rows");
-            writer.WriteStartArray();
-            foreach (var row in _rows)
-            {
-                writer.WriteStartObject();
-                writer.WriteString("table_name", row.TableName);
-                writer.WritePropertyName("values");
-                writer.WriteStartArray();
-                foreach (var val in row.Values)
-                {
-                    val.WriteTo(writer);
-                }
-                writer.WriteEndArray();
-                writer.WriteEndObject();
-            }
-            writer.WriteEndArray();
-
-            writer.WriteEndObject();
-        }
-
-        // Write to /metadata/output_{counter}.json using FileStream for WASI compatibility
         var filename = $"/metadata/output_{_fileCounter++}.json";
-        var bytes = stream.ToArray();
 
         try
         {
-            using var fs = new FileStream(filename, FileMode.Create, FileAccess.Write, FileShare.None);
-            fs.Write(bytes, 0, bytes.Length);
-            fs.Flush();
+            // Write directly to FileStream - when closed, WADUP reads and deletes the file
+            var fs = new FileStream(filename, FileMode.Create, FileAccess.Write, FileShare.None);
+            try
+            {
+                var writer = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = false });
+                try
+                {
+                    writer.WriteStartObject();
+
+                    // Write tables array
+                    writer.WritePropertyName("tables");
+                    writer.WriteStartArray();
+                    foreach (var table in _tables)
+                    {
+                        writer.WriteStartObject();
+                        writer.WriteString("name", table.Name);
+                        writer.WritePropertyName("columns");
+                        writer.WriteStartArray();
+                        foreach (var col in table.Columns)
+                        {
+                            writer.WriteStartObject();
+                            writer.WriteString("name", col.Name);
+                            writer.WriteString("data_type", col.DataType.ToString());
+                            writer.WriteEndObject();
+                        }
+                        writer.WriteEndArray();
+                        writer.WriteEndObject();
+                    }
+                    writer.WriteEndArray();
+
+                    // Write rows array
+                    writer.WritePropertyName("rows");
+                    writer.WriteStartArray();
+                    foreach (var row in _rows)
+                    {
+                        writer.WriteStartObject();
+                        writer.WriteString("table_name", row.TableName);
+                        writer.WritePropertyName("values");
+                        writer.WriteStartArray();
+                        foreach (var val in row.Values)
+                        {
+                            val.WriteTo(writer);
+                        }
+                        writer.WriteEndArray();
+                        writer.WriteEndObject();
+                    }
+                    writer.WriteEndArray();
+
+                    writer.WriteEndObject();
+                    writer.Flush();
+                }
+                finally
+                {
+                    writer.Dispose();
+                }
+
+                fs.Flush();
+            }
+            finally
+            {
+                // Explicitly close the file - this triggers WADUP to read and delete it
+                fs.Close();
+                fs.Dispose();
+            }
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Failed to write metadata file: {ex.Message}");
+            Console.Error.WriteLine($"Failed to write metadata file {filename}: {ex.Message}");
         }
 
-        // Clear for potential reuse
+        // Clear for next flush
         _tables.Clear();
         _rows.Clear();
     }

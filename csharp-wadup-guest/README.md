@@ -109,8 +109,9 @@ Unlike Rust, Go, or Python modules which use FFI imports, C# modules use file-ba
 1. Your module defines tables and inserts rows
 2. Metadata is accumulated in memory
 3. `Flush()` writes JSON to `/metadata/*.json`
-4. WADUP reads these files after `_start` completes
-5. WADUP applies the schema and data to the output database
+4. When the file is closed, WADUP reads it immediately and deletes it
+5. Any files not closed are processed after `_start` completes (fallback)
+6. WADUP applies the schema and data to the output database
 
 ### Metadata Format
 

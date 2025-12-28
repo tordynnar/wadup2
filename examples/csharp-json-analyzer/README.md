@@ -92,9 +92,10 @@ public static int Main()
 
 .NET WASI SDK doesn't support custom WASM imports. Instead, metadata is communicated via the virtual filesystem:
 
-1. Module writes JSON to `/metadata/output_0.json`
-2. WADUP reads metadata files after `_start` completes
-3. Metadata format matches WADUP's internal schema
+1. Module writes JSON to `/metadata/*.json`
+2. When the file is closed, WADUP reads it immediately and deletes it
+3. Any remaining files are processed after `_start` completes (fallback)
+4. Metadata format matches WADUP's internal schema
 
 ```json
 {

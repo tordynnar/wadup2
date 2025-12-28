@@ -13,8 +13,17 @@ public record JsonMetadata(
 
 public class JsonAnalyzer
 {
+    // Store key counts from the last analysis
+    private Dictionary<string, long> _keyCounts = new();
+
+    /// <summary>
+    /// Get the unique keys and their occurrence counts from the last Analyze call.
+    /// </summary>
+    public Dictionary<string, long> GetUniqueKeys() => _keyCounts;
+
     public JsonMetadata Analyze(string json)
     {
+        _keyCounts.Clear();
         var sizeBytes = System.Text.Encoding.UTF8.GetByteCount(json);
 
         // Try System.Text.Json first (built-in, faster)
@@ -41,7 +50,6 @@ public class JsonAnalyzer
 
     private JsonMetadata AnalyzeWithSystemTextJson(JsonElement root, long size)
     {
-        var uniqueKeys = new HashSet<string>();
         long totalKeys = 0;
         long maxDepth = 0;
         long arrays = 0;
@@ -57,7 +65,10 @@ public class JsonAnalyzer
                     objects++;
                     foreach (var prop in element.EnumerateObject())
                     {
-                        uniqueKeys.Add(prop.Name);
+                        if (_keyCounts.ContainsKey(prop.Name))
+                            _keyCounts[prop.Name]++;
+                        else
+                            _keyCounts[prop.Name] = 1;
                         totalKeys++;
                         Traverse(prop.Value, depth + 1);
                     }
@@ -76,7 +87,7 @@ public class JsonAnalyzer
         return new JsonMetadata(
             maxDepth,
             totalKeys,
-            uniqueKeys.Count,
+            _keyCounts.Count,
             arrays,
             objects,
             "System.Text.Json",
@@ -86,7 +97,6 @@ public class JsonAnalyzer
 
     private JsonMetadata AnalyzeWithNewtonsoft(JToken root, long size)
     {
-        var uniqueKeys = new HashSet<string>();
         long totalKeys = 0;
         long maxDepth = 0;
         long arrays = 0;
@@ -101,7 +111,10 @@ public class JsonAnalyzer
                 objects++;
                 foreach (var prop in obj.Properties())
                 {
-                    uniqueKeys.Add(prop.Name);
+                    if (_keyCounts.ContainsKey(prop.Name))
+                        _keyCounts[prop.Name]++;
+                    else
+                        _keyCounts[prop.Name] = 1;
                     totalKeys++;
                     Traverse(prop.Value, depth + 1);
                 }
@@ -119,7 +132,7 @@ public class JsonAnalyzer
         return new JsonMetadata(
             maxDepth,
             totalKeys,
-            uniqueKeys.Count,
+            _keyCounts.Count,
             arrays,
             objects,
             "Newtonsoft.Json",

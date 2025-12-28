@@ -451,11 +451,22 @@ impl ModuleInstance {
         )?;
 
         // fd_close - Close file descriptor
+        // Also processes metadata files immediately when closed
         linker.func_wrap(
             "wasi_snapshot_preview1",
             "fd_close",
-            |caller: Caller<StoreData>, fd: i32| -> Result<i32> {
-                let errno = caller.data().wasi_ctx.fd_close(fd as u32);
+            |mut caller: Caller<StoreData>, fd: i32| -> Result<i32> {
+                let (errno, close_result) = caller.data().wasi_ctx.fd_close(fd as u32);
+
+                // If this was a metadata file, process it immediately
+                if let Some(content) = close_result.metadata_content {
+                    // Debug output to show metadata is being processed on close
+                    eprintln!("WADUP: Processing metadata on fd_close ({} bytes)", content.len());
+                    if let Err(e) = Self::process_metadata_content(&content, caller.data_mut()) {
+                        tracing::warn!("Failed to process metadata on close: {}", e);
+                    }
+                }
+
                 Ok(errno as i32)
             },
         )?;
@@ -1128,8 +1139,11 @@ impl ModuleInstance {
         };
 
         if exit_code == 0 {
-            // Success - process any metadata files written by the module
-            self.process_metadata_files(&filesystem, &mut store)?;
+            // Debug output to show _start completed
+            eprintln!("WADUP: _start completed, checking for remaining metadata files");
+
+            // Success - process any remaining metadata files that weren't closed before _start returned
+            self.process_remaining_metadata_files(&filesystem, &mut store)?;
 
             // Extract context
             let ctx = &mut store.data_mut().processing_ctx;
@@ -1146,11 +1160,10 @@ impl ModuleInstance {
         }
     }
 
-    /// Process metadata files written by command-style modules.
+    /// Process raw metadata content (JSON bytes) and add to store data.
     ///
-    /// Files in /metadata/*.json are parsed and processed as either:
-    /// - Table definitions with "tables" array
-    /// - Row insertions with "rows" array
+    /// This is called immediately when a /metadata/*.json file is closed,
+    /// allowing real-time processing of metadata as files are written.
     ///
     /// Format:
     /// ```json
@@ -1163,14 +1176,68 @@ impl ModuleInstance {
     ///   ]
     /// }
     /// ```
-    fn process_metadata_files(
+    fn process_metadata_content(content: &[u8], store_data: &mut StoreData) -> Result<()> {
+        use crate::bindings_context::MetadataRow;
+        use crate::bindings_types::{Column, Value, TableSchema};
+
+        #[derive(serde::Deserialize)]
+        struct MetadataFile {
+            #[serde(default)]
+            tables: Vec<TableDef>,
+            #[serde(default)]
+            rows: Vec<RowDef>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct TableDef {
+            name: String,
+            columns: Vec<Column>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct RowDef {
+            table_name: String,
+            values: Vec<Value>,
+        }
+
+        // Parse as JSON
+        let json_str = String::from_utf8(content.to_vec())
+            .map_err(|e| anyhow::anyhow!("Metadata is not valid UTF-8: {}", e))?;
+
+        let metadata: MetadataFile = serde_json::from_str(&json_str)
+            .map_err(|e| anyhow::anyhow!("Failed to parse metadata JSON: {}", e))?;
+
+        let ctx = &mut store_data.processing_ctx;
+
+        // Process table definitions
+        for table in metadata.tables {
+            ctx.table_schemas.push(TableSchema {
+                name: table.name,
+                columns: table.columns,
+            });
+        }
+
+        // Process row insertions
+        for row in metadata.rows {
+            ctx.metadata.push(MetadataRow {
+                table_name: row.table_name,
+                values: row.values,
+            });
+        }
+
+        tracing::debug!("Processed metadata content ({} bytes)", content.len());
+        Ok(())
+    }
+
+    /// Process any remaining metadata files after _start completes.
+    ///
+    /// This is a fallback for files that weren't closed before _start returned.
+    /// Files are deleted after being processed.
+    fn process_remaining_metadata_files(
         &self,
         filesystem: &Arc<MemoryFilesystem>,
         store: &mut Store<StoreData>,
     ) -> Result<()> {
-        use crate::bindings_context::MetadataRow;
-        use crate::bindings_types::{Column, Value, TableSchema};
-
         // Get the /metadata directory
         let metadata_dir = match filesystem.get_dir("/metadata") {
             Ok(dir) => dir,
@@ -1195,62 +1262,15 @@ impl ModuleInstance {
                 }
             };
 
-            // Parse as JSON
-            let json_str = match String::from_utf8(contents) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!("Metadata file {} is not valid UTF-8: {}", path, e);
-                    continue;
-                }
-            };
-
-            #[derive(serde::Deserialize)]
-            struct MetadataFile {
-                #[serde(default)]
-                tables: Vec<TableDef>,
-                #[serde(default)]
-                rows: Vec<RowDef>,
+            // Process the content
+            if let Err(e) = Self::process_metadata_content(&contents, store.data_mut()) {
+                tracing::warn!("Failed to process metadata file {}: {}", path, e);
+            } else {
+                tracing::debug!("Processed remaining metadata file: {}", path);
             }
 
-            #[derive(serde::Deserialize)]
-            struct TableDef {
-                name: String,
-                columns: Vec<Column>,
-            }
-
-            #[derive(serde::Deserialize)]
-            struct RowDef {
-                table_name: String,
-                values: Vec<Value>,
-            }
-
-            let metadata: MetadataFile = match serde_json::from_str(&json_str) {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::warn!("Failed to parse metadata file {}: {}", path, e);
-                    continue;
-                }
-            };
-
-            let ctx = &mut store.data_mut().processing_ctx;
-
-            // Process table definitions
-            for table in metadata.tables {
-                ctx.table_schemas.push(TableSchema {
-                    name: table.name,
-                    columns: table.columns,
-                });
-            }
-
-            // Process row insertions
-            for row in metadata.rows {
-                ctx.metadata.push(MetadataRow {
-                    table_name: row.table_name,
-                    values: row.values,
-                });
-            }
-
-            tracing::debug!("Processed metadata file: {}", path);
+            // Delete the file after processing
+            let _ = metadata_dir.remove(&name);
         }
 
         Ok(())
