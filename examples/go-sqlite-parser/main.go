@@ -7,7 +7,7 @@ import (
 
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
-	"go-sqlite-parser/wadup"
+	"github.com/tordynnar/wadup2/go-wadup-guest"
 )
 
 const ContentPath = "/data.bin"

@@ -94,9 +94,9 @@ echo "  Build dir: $BUILD_DIR"
 
 # Copy shared C sources
 echo "Copying shared runtime sources..."
-cp "$WADUP_ROOT/python-wasm-runtime/src/main.c" "$BUILD_DIR/"
-cp "$WADUP_ROOT/python-wasm-runtime/src/signal_stubs.c" "$BUILD_DIR/"
-cp "$WADUP_ROOT/python-wasm-runtime/src/wadup_module.c" "$BUILD_DIR/"
+cp "$WADUP_ROOT/python-wadup-guest/src/main.c" "$BUILD_DIR/"
+cp "$WADUP_ROOT/python-wadup-guest/src/signal_stubs.c" "$BUILD_DIR/"
+cp "$WADUP_ROOT/python-wadup-guest/src/wadup_module.c" "$BUILD_DIR/"
 
 # Embed Python script
 echo "Embedding Python script..."

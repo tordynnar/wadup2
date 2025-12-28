@@ -17,9 +17,9 @@ GOARCH := wasm
 all: $(TARGET)
 
 # Build Go WASM module with standard Go (pure Go SQLite, no CGO)
-$(TARGET): main.go wadup/*.go go.mod
+$(TARGET): main.go go.mod ../../go-wadup-guest/*.go
 	@mkdir -p $(TARGET_DIR)
-	@echo "Building Go WASM module with standard Go (modernc.org/sqlite - pure Go)..."
+	@echo "Building Go WASM module with standard Go (ncruces/go-sqlite3 - pure Go)..."
 	@echo "  Go version: $(shell $(GO) version)"
 	@echo "  Target: $(GOOS)/$(GOARCH)"
 	@$(GO) mod download

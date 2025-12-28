@@ -1,6 +1,6 @@
-# Python WASM Runtime
+# Python WADUP Guest Library
 
-This directory contains the shared runtime components for building Python WASM modules for WADUP.
+This directory contains the shared guest library and runtime components for building Python WASM modules for WADUP.
 
 ## Contents
 
