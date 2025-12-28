@@ -18,14 +18,21 @@ type TableStat struct {
 	RowCount  int64
 }
 
-func main() {
-	// For standard Go WASM modules called via _start (reload-per-call):
-	// Put the module logic directly in main()
-	// The wadup runtime will reload this module for each file processed
+// process is the exported function called by WADUP runtime for each file
+// This uses the reactor pattern (module reuse) instead of reload-per-call
+//
+//go:wasmexport process
+func process() int32 {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
+		return 1
 	}
+	return 0
+}
+
+func main() {
+	// Empty main - module uses reactor pattern with process() export
+	// Go runtime initializes on module load, process() is called repeatedly
 }
 
 func run() error {
