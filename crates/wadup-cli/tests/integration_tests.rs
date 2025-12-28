@@ -60,6 +60,26 @@ fn build_wasm_module(example_name: &str) -> PathBuf {
     path
 }
 
+// Build shared Python WASI if not already built
+fn ensure_python_wasi_built() {
+    let mut python_build_script = workspace_root();
+    python_build_script.push("scripts");
+    python_build_script.push("build-python-wasi.sh");
+
+    // Only build if not already present
+    let mut python_lib = workspace_root();
+    python_lib.push("build/python-wasi/lib/libpython3.13.a");
+
+    if !python_lib.exists() {
+        println!("Building shared Python WASI (this may take 5-10 minutes)...");
+        let status = Command::new(python_build_script)
+            .status()
+            .expect("Failed to run build-python-wasi.sh");
+
+        assert!(status.success(), "Python WASI build failed");
+    }
+}
+
 fn setup_modules_dir(modules: &[&str]) -> tempfile::TempDir {
     let modules_dir = tempfile::tempdir().unwrap();
 
@@ -254,20 +274,17 @@ fn test_combined_sqlite_and_zip() {
 
 // Helper function to build Python WASM module (doesn't use Cargo)
 fn build_python_module(module_name: &str) -> PathBuf {
+    // Ensure shared Python WASI is built first
+    ensure_python_wasi_built();
+
     let mut python_example = workspace_root();
     python_example.push(format!("examples/{}", module_name));
 
-    // Run build.sh script (or just 'make' for simpler builds)
-    let build_command = if module_name == "python-sqlite-parser" {
-        "./build.sh"
-    } else {
-        "make"
-    };
-
-    let build_status = Command::new(build_command)
+    // Build module using make
+    let build_status = Command::new("make")
         .current_dir(&python_example)
         .status()
-        .expect(&format!("Failed to run {} for {}", build_command, module_name));
+        .expect(&format!("Failed to run make for {}", module_name));
 
     assert!(build_status.success(), "{} module build failed", module_name);
 

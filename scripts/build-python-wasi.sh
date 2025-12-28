@@ -3,7 +3,7 @@ set -e
 
 PYTHON_VERSION="3.13.7"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_DIR="${SCRIPT_DIR}/python-wasi"
+PYTHON_DIR="${SCRIPT_DIR}/../build/python-wasi"
 
 # Detect platform for WASI SDK
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')

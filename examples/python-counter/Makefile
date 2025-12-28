@@ -2,7 +2,9 @@
 
 # Configuration
 PYTHON_VERSION = 3.13
-PYTHON_DIR = $(CURDIR)/python-wasi
+# Find workspace root (go up from examples/MODULE_NAME)
+WADUP_ROOT = $(shell cd $(CURDIR)/../.. && pwd)
+PYTHON_DIR = $(WADUP_ROOT)/build/python-wasi
 
 # Detect platform
 UNAME_S := $(shell uname -s | tr '[:upper:]' '[:lower:]')

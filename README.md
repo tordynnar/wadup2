@@ -288,17 +288,29 @@ The build script will automatically:
 
 See [examples/sqlite-parser/README.md](examples/sqlite-parser/README.md) for detailed documentation.
 
-**Python SQLite Parser** (CPython 3.13.7):
+**Python Modules** (CPython 3.13.7):
+
+First, build the shared Python WASI runtime (one-time, ~5-10 minutes):
 ```bash
-cd examples/python-sqlite-parser
-./build.sh
+./scripts/build-python-wasi.sh
 ```
 
-This is a more complex build that:
-- Downloads and compiles CPython 3.13.7 for WASI (~5-10 minute build)
-- Builds SQLite 3.45.1 for WASI
-- Freezes Python stdlib modules into the binary
-- Creates a self-contained ~26MB WASM module
+Then build individual Python modules:
+```bash
+cd examples/python-sqlite-parser
+make
+
+cd ../python-counter
+make
+```
+
+The shared Python WASI build (`build/python-wasi/`) includes:
+- CPython 3.13.7 compiled for wasm32-wasip1
+- SQLite 3.45.1 for WASI
+- Frozen Python standard library
+- All dependencies (~45MB)
+
+All Python modules link against this shared build, avoiding duplication.
 
 **Important**: The Python interpreter is initialized once per worker thread and reused across all files. Python global variables persist between files processed by the same thread. The module's `process()` function should be idempotent or explicitly reset state as needed.
 

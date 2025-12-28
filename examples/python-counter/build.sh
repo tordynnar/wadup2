@@ -11,7 +11,7 @@ echo ""
 
 # Step 1: Build CPython for WASI if needed
 echo "[1/2] Checking CPython WASI build..."
-./build-python.sh
+../../scripts/build-python-wasi.sh
 
 echo ""
 
