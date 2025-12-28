@@ -438,3 +438,101 @@ fn test_python_module_reuse() {
     println!("✓ Module reuse verified: counter values are {}, {}, {}",
              counter_values[0], counter_values[1], counter_values[2]);
 }
+
+#[test]
+fn test_python_c_extensions() {
+    // Build the CLI
+    let status = Command::new("cargo")
+        .args(&["build", "--release"])
+        .current_dir(workspace_root())
+        .status()
+        .expect("Failed to build wadup CLI");
+    assert!(status.success(), "CLI build failed");
+
+    // Build Python module test module
+    let python_wasm = build_python_module("python-module-test");
+
+    // Setup modules directory
+    let modules_dir = tempfile::tempdir().unwrap();
+    let dest = modules_dir.path().join("python_module_test.wasm");
+    fs::copy(&python_wasm, &dest).unwrap();
+
+    // Setup input directory with a single dummy file
+    let input_dir = tempfile::tempdir().unwrap();
+    fs::write(input_dir.path().join("test.txt"), "test").unwrap();
+
+    // Setup output database
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_db = output_dir.path().join("output.db");
+
+    // Run wadup
+    let status = Command::new(wadup_binary())
+        .args(&[
+            "--modules", modules_dir.path().to_str().unwrap(),
+            "--input", input_dir.path().to_str().unwrap(),
+            "--output", output_db.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to run wadup");
+
+    assert!(status.success(), "wadup execution failed");
+
+    // Verify results - all C extensions should import successfully
+    let conn = rusqlite::Connection::open(&output_db).unwrap();
+
+    // Check that the table exists
+    let table_exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='c_extension_imports'",
+        [],
+        |row| row.get::<_, i64>(0)
+    ).unwrap() > 0;
+
+    assert!(table_exists, "c_extension_imports table not created");
+
+    // Get all import results
+    let mut stmt = conn.prepare(
+        "SELECT module_name, import_successful, error_message FROM c_extension_imports ORDER BY module_name"
+    ).unwrap();
+
+    let results: Vec<(String, i64, String)> = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    // Expected C extension modules that are available in Python WASI build
+    // Note: bz2, hashlib, lzma, struct, and zlib may not be available
+    // depending on the WASI build configuration
+    let expected_modules = vec![
+        "array", "binascii", "cmath", "io", "itertools",
+        "math", "time", "unicodedata"
+    ];
+
+    // Verify we have results for all expected modules
+    assert_eq!(results.len(), expected_modules.len(),
+               "Expected {} modules, got {}", expected_modules.len(), results.len());
+
+    // Verify each module imported successfully
+    let mut failed_imports = Vec::new();
+    for (module_name, import_successful, error_message) in &results {
+        if *import_successful == 0 {
+            failed_imports.push(format!("{}: {}", module_name, error_message));
+        }
+    }
+
+    if !failed_imports.is_empty() {
+        panic!("Failed to import the following C extension modules:\n{}",
+               failed_imports.join("\n"));
+    }
+
+    println!("✓ All {} C extension modules imported successfully:", expected_modules.len());
+    for (module_name, _, _) in &results {
+        println!("  - {}", module_name);
+    }
+}
