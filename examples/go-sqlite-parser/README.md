@@ -8,7 +8,7 @@ This example demonstrates how to build WASM modules for WADUP using **standard G
 
 - Standard Go compilation with `GOOS=wasip1 GOARCH=wasm` target
 - Pure Go SQLite library (`github.com/ncruces/go-sqlite3`) - no CGO required
-- Reload-per-call pattern using `_start` entry point
+- Reactor pattern with `process` export (module reuse like Rust/Python)
 - Proper WASI filesystem access for SQLite databases
 - Using the shared `go-wadup-guest` library for host FFI
 
@@ -55,27 +55,33 @@ cargo build --release
 
 ## Architecture
 
-### Entry Point: `_start` (Reload-Per-Call)
+### Reactor Pattern with `process` Export
 
-Go modules use the `_start` entry point, which triggers **reload-per-call** mode:
+Go modules use the **reactor pattern** (module reuse) just like Rust and Python modules:
 
 ```go
-func main() {
-    // Put module logic directly in main()
-    // WADUP runtime creates a fresh instance for each file
+//go:wasmexport process
+func process() int32 {
+    // Called repeatedly for each file (module instance reused)
     if err := run(); err != nil {
         fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        return
+        return 1
     }
+    return 0
+}
+
+func main() {
+    // Empty - module uses reactor pattern
+    // Go runtime initializes on first _start call
 }
 ```
 
-**Key Differences from Rust Modules:**
+**How It Works:**
 
-- Rust uses `process()` function with module reuse (one instance processes all files)
-- Go uses `_start` entry point with reload-per-call (fresh instance per file)
-- Go's `main()` returns to runtime, which calls `runtime.exit` causing a WASM trap
-- WADUP detects this trap and extracts the processing context before the instance is destroyed
+1. WADUP loads module and calls `_start` once → Go runtime initializes
+2. WADUP calls `process` for each file → Module instance reused
+3. Same pattern as Rust/Python modules - no reload overhead
+4. Module exports both `_start` (for initialization) and `process` (for processing)
 
 ### SQLite Database Access
 
@@ -137,20 +143,20 @@ err := table.InsertRow([]wadup.Value{
 - Avoid libraries requiring CGO or system calls
 - Check for WASI compatibility
 
-**3. `_start` Entry Point**
-- Put all logic in `main()` function
-- No need to export functions with `//go:wasmexport`
-- WADUP automatically detects `_start` and uses reload-per-call
+**3. `//go:wasmexport process`**
+- Export `process` function for reactor pattern (module reuse)
+- Works with standard Go (no TinyGo needed!)
+- Module instance reused across all files (efficient)
 
 **4. File URIs for SQLite**
 - Use `file:/data.bin?mode=ro&immutable=1` format
 - Required for WASI filesystem compatibility
 - Direct paths may fail
 
-**5. Reload-Per-Call Pattern**
-- Fresh instance per file = clean state
-- No shared state between files (unlike Rust modules)
-- Simplifies module development
+**5. Reactor Pattern**
+- Module reused across files (same as Rust/Python)
+- `_start` initializes Go runtime once
+- `process` called repeatedly for each file
 
 ### ❌ What Doesn't Work
 
@@ -175,10 +181,10 @@ err := table.InsertRow([]wadup.Value{
 - WASI filesystem has restrictions
 - Always use file URIs
 
-**5. Custom Entry Points**
-- Can't use `//go:wasmexport process` with standard Go
-- `main()` signature is fixed (no args, no return value)
-- Use `_start` entry point instead
+**5. TinyGo with `//go:wasmexport`**
+- TinyGo's `//go:wasmexport` has limitations after `main()` returns
+- Standard Go's `//go:wasmexport process` works perfectly!
+- No need to use TinyGo - standard Go is better
 
 ## Technical Details
 
@@ -194,17 +200,17 @@ No linking, no custom SDK, no multi-stage compilation needed!
 
 ### Runtime Behavior
 
+**Module Load (once):**
 1. WADUP creates WASM instance
-2. Calls `_start()` entry point
-3. `_start` initializes Go runtime and calls `main()`
-4. `main()` executes module logic
-5. `main()` returns to Go runtime
-6. Go runtime calls `runtime.exit(0)`
-7. `runtime.exit` causes WASM trap
-8. WADUP detects trap, extracts processing context
-9. Instance is destroyed
+2. Calls `_start()` to initialize Go runtime
+3. `main()` returns immediately (empty function)
 
-The trap is **expected behavior** for Go command-style modules and is handled gracefully.
+**File Processing (repeated for each file):**
+4. WADUP calls `process()` exported function
+5. Module processes file and returns status code
+6. Instance reused for next file
+
+This is the **reactor pattern** - module loaded once, used many times.
 
 ### Module Size
 
@@ -214,9 +220,9 @@ The trap is **expected behavior** for Go command-style modules and is handled gr
 
 ### Performance
 
-- Reload-per-call has overhead (fresh instance per file)
-- For most use cases, the overhead is negligible
-- Go runtime initialization is fast (~1ms)
+- Module reuse eliminates per-file initialization overhead
+- Go runtime initialized once, not per file
+- Same performance characteristics as Rust/Python modules
 - SQLite operations dominate processing time
 
 ## Project Structure
@@ -252,8 +258,8 @@ examples/go-sqlite-parser/
 | Build Tool | `go build` | `cargo build` | WASI SDK + make |
 | WASM Size | 8.3 MB | 2.5 MB | 20 MB |
 | Build Time | ~10s | ~30s | ~5m (first build) |
-| Entry Point | `_start` | `process` | `process` |
-| Reload Pattern | Per-call | Reused | Reused |
+| Entry Point | `process` | `process` | `process` |
+| Module Pattern | Reused | Reused | Reused |
 | Standard Library | Full | Full | Full |
 | Learning Curve | Low | Medium | Low |
 
