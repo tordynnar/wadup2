@@ -296,6 +296,27 @@ fn build_python_module(module_name: &str) -> PathBuf {
     wasm_path
 }
 
+// Helper function to build Go WASM module (doesn't use Cargo)
+fn build_go_module(module_name: &str) -> PathBuf {
+    let mut go_example = workspace_root();
+    go_example.push(format!("examples/{}", module_name));
+
+    // Build module using make
+    let build_status = Command::new("make")
+        .current_dir(&go_example)
+        .status()
+        .expect(&format!("Failed to run make for {}", module_name));
+
+    assert!(build_status.success(), "{} module build failed", module_name);
+
+    // Return path to WASM file
+    let mut wasm_path = go_example;
+    wasm_path.push(format!("target/{}.wasm", module_name.replace("-", "_")));
+
+    assert!(wasm_path.exists(), "Go WASM module not found at {:?}", wasm_path);
+    wasm_path
+}
+
 #[test]
 fn test_python_sqlite_parser() {
     // Build the CLI
@@ -365,6 +386,78 @@ fn test_python_sqlite_parser() {
 
     assert!(python_stats.len() >= 2, "Expected at least 2 tables");
     assert!(python_stats.iter().any(|(name, _)| name == "users"),
+            "Missing 'users' table");
+}
+
+#[test]
+fn test_go_sqlite_parser() {
+    // Build the CLI
+    let status = Command::new("cargo")
+        .args(&["build", "--release"])
+        .current_dir(workspace_root())
+        .status()
+        .expect("Failed to build wadup CLI");
+    assert!(status.success(), "CLI build failed");
+
+    // Build Go module
+    let go_wasm = build_go_module("go-sqlite-parser");
+
+    // Setup modules directory
+    let modules_dir = tempfile::tempdir().unwrap();
+    let dest = modules_dir.path().join("go_sqlite_parser.wasm");
+    fs::copy(&go_wasm, &dest).unwrap();
+
+    // Setup input directory
+    let input_dir = tempfile::tempdir().unwrap();
+    let db_path = input_dir.path().join("sample.db");
+    let mut fixture_path = workspace_root();
+    fixture_path.push("tests/fixtures/sample.db");
+    fs::copy(&fixture_path, &db_path).unwrap();
+
+    // Setup output database
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_db = output_dir.path().join("output.db");
+
+    // Run wadup
+    let status = Command::new(wadup_binary())
+        .args(&[
+            "--modules", modules_dir.path().to_str().unwrap(),
+            "--input", input_dir.path().to_str().unwrap(),
+            "--output", output_db.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to run wadup");
+
+    assert!(status.success(), "wadup execution failed");
+
+    // Verify results match Rust/Python sqlite-parser
+    let conn = rusqlite::Connection::open(&output_db).unwrap();
+
+    // Check table exists
+    let mut stmt = conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='db_table_stats'"
+    ).unwrap();
+    assert!(stmt.exists([]).unwrap(), "db_table_stats table not created");
+
+    // Check data
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM db_table_stats",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert!(count > 0, "No statistics recorded");
+
+    // Verify content matches Rust/Python versions
+    let go_stats: Vec<(String, i64)> = conn.prepare(
+        "SELECT table_name, row_count FROM db_table_stats ORDER BY table_name"
+    ).unwrap()
+    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap();
+
+    assert!(go_stats.len() >= 2, "Expected at least 2 tables");
+    assert!(go_stats.iter().any(|(name, _)| name == "users"),
             "Missing 'users' table");
 }
 

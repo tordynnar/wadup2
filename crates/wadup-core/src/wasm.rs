@@ -29,6 +29,8 @@ pub struct WasmRuntime {
 pub struct ModuleInfo {
     pub name: String,
     pub module: Module,
+    pub entry_point: String,  // "process" or "process_once"
+    pub reload_per_call: bool, // true if process_once (requires instance reload)
 }
 
 impl WasmRuntime {
@@ -69,11 +71,15 @@ impl WasmRuntime {
 
                 let module = Module::from_file(&self.engine, &path)?;
 
-                // Validate module exports
-                self.validate_module(&module)?;
+                // Validate module exports and determine entry point
+                let (entry_point, reload_per_call) = self.validate_module(&module)?;
 
-                tracing::info!("Loaded WASM module: {}", name);
-                self.modules.push(ModuleInfo { name, module });
+                if reload_per_call {
+                    tracing::info!("Loaded WASM module: {} (reload-per-call mode)", name);
+                } else {
+                    tracing::info!("Loaded WASM module: {}", name);
+                }
+                self.modules.push(ModuleInfo { name, module, entry_point, reload_per_call });
             }
         }
 
@@ -84,15 +90,22 @@ impl WasmRuntime {
         Ok(())
     }
 
-    fn validate_module(&self, module: &Module) -> Result<()> {
+    fn validate_module(&self, module: &Module) -> Result<(String, bool)> {
         let has_process = module.exports()
             .any(|export| export.name() == "process");
+        let has_start = module.exports()
+            .any(|export| export.name() == "_start");
 
-        if !has_process {
-            anyhow::bail!("Module missing required 'process' function");
+        if has_process {
+            // Regular process modules can be reused
+            Ok(("process".to_string(), false))
+        } else if has_start {
+            // _start entry point requires reload-per-call (Go command-style modules)
+            // Each call to _start runs main() and exits
+            Ok(("_start".to_string(), true))
+        } else {
+            anyhow::bail!("Module missing required 'process' or '_start' function");
         }
-
-        Ok(())
     }
 
     pub fn create_instances(
@@ -106,6 +119,8 @@ impl WasmRuntime {
                 &self.engine,
                 &module_info.module,
                 &module_info.name,
+                &module_info.entry_point,
+                module_info.reload_per_call,
                 &self.limits,
                 metadata_store.clone(),
             )?;
@@ -145,6 +160,12 @@ pub struct ModuleInstance {
     fuel_limit: Option<u64>,
     metadata_store: MetadataStore,
     _limiter: Option<Box<ResourceLimiterImpl>>,
+    entry_point: String,
+    reload_per_call: bool,
+    // For reload_per_call modules, store engine and module for creating new instances
+    engine: Option<Engine>,
+    module: Option<Module>,
+    limits: Option<ResourceLimits>,
 }
 
 impl ModuleInstance {
@@ -152,6 +173,8 @@ impl ModuleInstance {
         engine: &Engine,
         module: &Module,
         name: &str,
+        entry_point: &str,
+        reload_per_call: bool,
         limits: &ResourceLimits,
         metadata_store: MetadataStore,
     ) -> Result<Self> {
@@ -200,6 +223,15 @@ impl ModuleInstance {
 
         let instance = linker.instantiate(&mut store, module)?;
 
+        // For reload_per_call modules, DON'T call _start yet - it will be called right before process_once
+        // For regular modules, call _start once during initialization if it exists
+        if !reload_per_call {
+            if let Ok(start_func) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
+                // Call and ignore panic from main returning
+                let _ = start_func.call(&mut store, ());
+            }
+        }
+
         Ok(Self {
             store,
             instance,
@@ -207,6 +239,11 @@ impl ModuleInstance {
             fuel_limit: limits.fuel,
             metadata_store,
             _limiter: _limiter_box,
+            entry_point: entry_point.to_string(),
+            reload_per_call,
+            engine: if reload_per_call { Some(engine.clone()) } else { None },
+            module: if reload_per_call { Some(module.clone()) } else { None },
+            limits: if reload_per_call { Some(limits.clone()) } else { None },
         })
     }
 
@@ -963,6 +1000,11 @@ impl ModuleInstance {
         content_uuid: uuid::Uuid,
         content_data: crate::shared_buffer::SharedBuffer,
     ) -> Result<ProcessingContext> {
+        // For reload_per_call modules (TinyGo), create a fresh instance
+        if self.reload_per_call {
+            return self.process_content_with_reload(content_uuid, content_data);
+        }
+
         // Update /data.bin in the in-memory filesystem (zero-copy)
         let filesystem = &self.store.data().wasi_ctx.filesystem;
         filesystem.set_data_bin(content_data.to_bytes())?;
@@ -976,9 +1018,9 @@ impl ModuleInstance {
             self.store.set_fuel(fuel)?;
         }
 
-        // Call process function
+        // Call the process entry point (only 'process' modules reach here; '_start' uses reload)
         let process_func = self.instance
-            .get_typed_func::<(), i32>(&mut self.store, "process")?;
+            .get_typed_func::<(), i32>(&mut self.store, &self.entry_point)?;
 
         let result = process_func.call(&mut self.store, ());
 
@@ -1011,6 +1053,93 @@ impl ModuleInstance {
                     Err(e.into())
                 }
             }
+        }
+    }
+
+    fn process_content_with_reload(
+        &mut self,
+        content_uuid: uuid::Uuid,
+        content_data: crate::shared_buffer::SharedBuffer,
+    ) -> Result<ProcessingContext> {
+        // Create a fresh instance for this call (required for TinyGo/process_once modules)
+        let engine = self.engine.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("reload_per_call module missing engine"))?;
+        let module = self.module.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("reload_per_call module missing module"))?;
+        let limits = self.limits.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("reload_per_call module missing limits"))?;
+
+        let mut fresh_instance = Self::new(
+            engine,
+            module,
+            &self.name,
+            &self.entry_point,
+            true,  // Keep reload_per_call to prevent _start during instantiation
+            limits,
+            self.metadata_store.clone(),
+        )?;
+
+        // Update /data.bin before calling anything
+        let filesystem = &fresh_instance.store.data().wasi_ctx.filesystem;
+        filesystem.set_data_bin(content_data.to_bytes())?;
+
+        // Set up new context
+        let ctx = ProcessingContext::new(content_uuid, content_data);
+        fresh_instance.store.data_mut().processing_ctx = ctx;
+
+        // Replenish fuel
+        if let Some(fuel) = fresh_instance.fuel_limit {
+            fresh_instance.store.set_fuel(fuel)?;
+        }
+
+        // Call the entry point - signature depends on entry point name
+        if fresh_instance.entry_point == "_start" {
+            // '_start' entry point has no return value (standard Go command-style modules)
+            let start_func = fresh_instance.instance
+                .get_typed_func::<(), ()>(&mut fresh_instance.store, "_start")?;
+
+            let result = start_func.call(&mut fresh_instance.store, ());
+
+            // For Go modules, runtime.exit is called after main() completes successfully
+            // This causes a trap, but we should still extract the context
+            let should_extract = match &result {
+                Ok(()) => true,
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    // Treat runtime.exit as success for Go modules
+                    error_msg.contains("runtime.exit") || error_msg.contains("wasm_pc_f_loop")
+                }
+            };
+
+            if should_extract {
+                // Extract context (module completed successfully or exited normally)
+                let ctx = &mut fresh_instance.store.data_mut().processing_ctx;
+                let extracted = ProcessingContext {
+                    content_uuid: ctx.content_uuid,
+                    content_data: ctx.content_data.clone(),
+                    subcontent: std::mem::take(&mut ctx.subcontent),
+                    metadata: std::mem::take(&mut ctx.metadata),
+                    table_schemas: std::mem::take(&mut ctx.table_schemas),
+                };
+                Ok(extracted)
+            } else if let Err(e) = result {
+                // Actual error (not just runtime.exit)
+                let error_msg = e.to_string();
+                if error_msg.contains("fuel") || error_msg.contains("out of fuel") {
+                    anyhow::bail!("Module '{}' exceeded fuel limit (CPU limit)", fresh_instance.name)
+                } else if error_msg.contains("stack overflow") {
+                    anyhow::bail!("Module '{}' stack overflow", fresh_instance.name)
+                } else if error_msg.contains("memory") {
+                    anyhow::bail!("Module '{}' memory limit exceeded", fresh_instance.name)
+                } else {
+                    Err(e.into())
+                }
+            } else {
+                unreachable!()
+            }
+        } else {
+            // Only _start modules use reload_per_call
+            anyhow::bail!("Unexpected entry point in reload path: {}", fresh_instance.entry_point)
         }
     }
 
