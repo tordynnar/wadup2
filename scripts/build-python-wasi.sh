@@ -128,42 +128,81 @@ with open('Tools/build/freeze_modules.py', 'r') as f:
 # Uncomment encodings
 content = content.replace("#'<encodings.*>',", "        '<encodings.*>',")
 
-# Add comprehensive stdlib modules for sqlite3 and dependencies
+# Add comprehensive stdlib modules (only if not already added)
 # Use <package.*> for package directories, plain names for single .py files
-stdlib_section = """    ('stdlib - comprehensive for sqlite3', [
-        'functools',
+# Note: C extension modules (array, binascii, bz2, cmath, io, itertools, lzma,
+#       math, struct, time, unicodedata, zlib) are compiled as built-ins, not frozen
+if "'stdlib - comprehensive'" not in content:
+    stdlib_section = """    ('stdlib - comprehensive', [
+        'base64',
+        'bisect',
+        'calendar',
         '<collections.*>',
-        'operator',
-        'keyword',
-        'heapq',
-        'reprlib',
-        'weakref',
-        'datetime',
-        'warnings',
-        'types',
-        'enum',
+        'contextlib',
+        'contextvars',
         'copy',
+        'csv',
+        'dataclasses',
+        'datetime',
+        'decimal',
+        'difflib',
+        '<email.*>',
+        'enum',
+        'functools',
+        'gzip',
+        'heapq',
+        'hmac',
+        '<html.*>',
+        'ipaddress',
+        '<json.*>',
+        'keyword',
+        'linecache',
+        'locale',
+        'mimetypes',
+        'numbers',
+        'operator',
+        '<pathlib.*>',
+        'pprint',
+        'queue',
+        'random',
         '<re.*>',
+        'reprlib',
+        'shlex',
         'sre_compile',
         'sre_parse',
         'sre_constants',
-        'contextlib',
-        'traceback',
-        'linecache',
         '<sqlite3.*>',
+        'statistics',
+        'string',
+        'stringprep',
+        'tarfile',
+        'textwrap',
+        '<tomllib.*>',
+        'traceback',
+        'types',
+        'typing',
+        'urllib.parse',
+        'uuid',
+        'warnings',
+        'weakref',
+        '<xml.*>',
+        '<zipfile.*>',
+        '<zoneinfo.*>',
     ]),
 """
 
-# Find TESTS_SECTION and insert before it
-content = content.replace(
-    "    (TESTS_SECTION, [",
-    stdlib_section + "    (TESTS_SECTION, ["
-)
+    # Find TESTS_SECTION and insert before it
+    content = content.replace(
+        "    (TESTS_SECTION, [",
+        stdlib_section + "    (TESTS_SECTION, ["
+    )
 
-with open('Tools/build/freeze_modules.py', 'w') as f:
-    f.write(content)
+    with open('Tools/build/freeze_modules.py', 'w') as f:
+        f.write(content)
 
-print("Modified freeze_modules.py successfully")
+    print("Modified freeze_modules.py successfully")
+else:
+    print("freeze_modules.py already contains comprehensive stdlib modules")
 PYEOF
 
 # Regenerate frozen modules
