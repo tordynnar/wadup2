@@ -48,11 +48,19 @@ enum FileHandle {
     Stderr,
 }
 
-/// Sub-content emission data (paired data + metadata files)
+/// Sub-content emission data (paired data + metadata files, or slice reference)
 pub struct SubcontentEmission {
     pub filename: String,
-    /// The sub-content data as Bytes (zero-copy from the in-memory filesystem)
-    pub data: bytes::Bytes,
+    /// The sub-content data - either owned bytes or a slice reference
+    pub data: SubcontentEmissionData,
+}
+
+/// Data for a sub-content emission
+pub enum SubcontentEmissionData {
+    /// Owned bytes data (zero-copy from the in-memory filesystem)
+    Bytes(bytes::Bytes),
+    /// Slice of parent content (offset and length)
+    Slice { offset: usize, length: usize },
 }
 
 /// Result of closing a file - may contain metadata or subcontent if it was a special file
@@ -354,10 +362,13 @@ impl WasiCtx {
         }
     }
 
-    /// Process a subcontent metadata file and find matching data file (zero-copy).
+    /// Process a subcontent metadata file and find matching data file (zero-copy) or slice reference.
     ///
-    /// The data file is extracted as Bytes without copying - the BytesMut from the
+    /// For owned data: The data file is extracted as Bytes without copying - the BytesMut from the
     /// in-memory filesystem is frozen directly into Bytes.
+    ///
+    /// For slice data: If the metadata contains `offset` and `length` fields, it's treated as a
+    /// slice of the parent content and no data file is expected.
     fn process_subcontent_metadata(&self, metadata_path: &str) -> Option<SubcontentEmission> {
         // Extract N from /subcontent/metadata_N.json
         let filename = metadata_path.trim_start_matches("/subcontent/");
@@ -365,27 +376,40 @@ impl WasiCtx {
             .strip_prefix("metadata_")
             .and_then(|s| s.strip_suffix(".json"))?;
 
-        // Read metadata file to get the target filename
+        // Read metadata file to get the target filename and optional slice info
         let metadata_content = self.filesystem.read_file(metadata_path).ok()?;
         let metadata_str = String::from_utf8(metadata_content).ok()?;
 
-        // Parse JSON to get filename
-        // Format: {"filename": "extracted.txt"}
+        // Parse JSON to get filename and optional slice info
+        // Format: {"filename": "extracted.txt"} for bytes
+        // Format: {"filename": "extracted.txt", "offset": 0, "length": 100} for slice
         #[derive(serde::Deserialize)]
         struct SubcontentMetadata {
             filename: String,
+            offset: Option<usize>,
+            length: Option<usize>,
         }
         let metadata: SubcontentMetadata = serde_json::from_str(&metadata_str).ok()?;
 
-        // Take ownership of the data file as Bytes (zero-copy: freezes BytesMut into Bytes)
-        // This also removes the file from the filesystem
-        let data_path = format!("/subcontent/data_{}.bin", n);
-        let data = self.filesystem.take_file_bytes(&data_path).ok()?;
-
-        // Delete the metadata file (data file was already removed by take_file_bytes)
-        if let Ok((parent_dir, filename)) = self.resolve_path(metadata_path) {
-            let _ = parent_dir.remove(&filename);
+        // Delete the metadata file first
+        if let Ok((parent_dir, fname)) = self.resolve_path(metadata_path) {
+            let _ = parent_dir.remove(&fname);
         }
+
+        // Check if this is a slice reference (both offset and length present)
+        let data = match (metadata.offset, metadata.length) {
+            (Some(offset), Some(length)) => {
+                // Slice reference - no data file expected
+                SubcontentEmissionData::Slice { offset, length }
+            }
+            _ => {
+                // Owned data - take ownership of the data file as Bytes (zero-copy)
+                // This also removes the file from the filesystem
+                let data_path = format!("/subcontent/data_{}.bin", n);
+                let bytes = self.filesystem.take_file_bytes(&data_path).ok()?;
+                SubcontentEmissionData::Bytes(bytes)
+            }
+        };
 
         Some(SubcontentEmission {
             filename: metadata.filename,

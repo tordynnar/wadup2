@@ -146,19 +146,23 @@ MetadataWriter.Flush();
 
 **Emit Sub-Content:**
 ```csharp
-// Emit raw bytes as sub-content
-SubContentWriter.Emit("extracted.bin", byteArray);
+// Emit data with streaming (zero-copy)
+var emitter = SubContentWriter.Emit("extracted.bin");
+emitter.Stream.Write(data, 0, data.Length);
+emitter.Complete();
 
-// Emit text as sub-content (UTF-8 encoded)
-SubContentWriter.EmitText("extracted.txt", "Hello, world!");
-
-// Flush to write sub-content files
-SubContentWriter.Flush();
+// Emit a slice of the input as sub-content (zero-copy, no data copied)
+SubContentWriter.EmitSlice("embedded.dat", offset: 100, length: 500);
 ```
 
-Each emission creates two files with **zero-copy** data handling:
-- `/subcontent/data_N.bin` - Raw binary data (write first)
-- `/subcontent/metadata_N.json` - Filename metadata (write last to trigger processing)
+**Two emission modes (both zero-copy):**
+
+1. **Streaming data** (`Emit`): Returns emitter for direct stream writing:
+   - Write to `emitter.Stream` → `/subcontent/data_N.bin`
+   - Call `emitter.Complete()` to close and trigger processing
+
+2. **Slice reference** (`EmitSlice`): References input content range:
+   - `/subcontent/metadata_N.json` - Filename + offset + length (no data file)
 
 When the metadata file is closed, WADUP extracts the data without copying and queues it for recursive processing. To avoid infinite recursion, emit content that won't trigger your own module (e.g., emit `.txt` from a JSON analyzer).
 
@@ -187,8 +191,9 @@ When the metadata file is closed, WADUP extracts the data without copying and qu
 - WADUP processes files immediately on close
 
 **4. Zero-Copy Sub-Content**
-- Write data to `/subcontent/data_N.bin`, metadata to `/subcontent/metadata_N.json`
-- WADUP extracts data without copying (BytesMut → Bytes freeze)
+- Owned data: Write to `/subcontent/data_N.bin` + `/subcontent/metadata_N.json`
+- Slice reference: Write only `/subcontent/metadata_N.json` with offset/length
+- WADUP extracts data without copying (BytesMut → Bytes freeze for owned, slice for references)
 - Efficient recursive processing of extracted content
 
 **5. Standard .NET Libraries**

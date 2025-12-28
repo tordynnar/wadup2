@@ -467,9 +467,17 @@ impl ModuleInstance {
                     }
                 }
 
-                // If this was a subcontent emission (paired data+metadata files), process it immediately
+                // If this was a subcontent emission (paired data+metadata files or slice), process it immediately
                 if let Some(emission) = close_result.subcontent_emission {
-                    eprintln!("WADUP: Processing subcontent on fd_close: {} ({} bytes)", emission.filename, emission.data.len());
+                    use crate::wasi_impl::SubcontentEmissionData;
+                    match &emission.data {
+                        SubcontentEmissionData::Bytes(bytes) => {
+                            eprintln!("WADUP: Processing subcontent on fd_close: {} ({} bytes)", emission.filename, bytes.len());
+                        }
+                        SubcontentEmissionData::Slice { offset, length } => {
+                            eprintln!("WADUP: Processing subcontent slice on fd_close: {} (offset={}, length={})", emission.filename, offset, length);
+                        }
+                    }
                     Self::process_subcontent_emission(emission, caller.data_mut());
                 }
 
@@ -1237,19 +1245,27 @@ impl ModuleInstance {
         Ok(())
     }
 
-    /// Process a subcontent emission (paired data+metadata files) and add to store data.
+    /// Process a subcontent emission (paired data+metadata files or slice reference) and add to store data.
     ///
     /// This is called immediately when a /subcontent/metadata_N.json file is closed.
-    /// The matching /subcontent/data_N.bin file provides the raw data as Bytes (zero-copy:
-    /// the BytesMut from the in-memory filesystem is frozen directly into Bytes).
+    ///
+    /// For owned data: The matching /subcontent/data_N.bin file provides the raw data as Bytes
+    /// (zero-copy: the BytesMut from the in-memory filesystem is frozen directly into Bytes).
+    ///
+    /// For slice data: If the metadata contains offset and length, it's a slice of parent content.
     fn process_subcontent_emission(emission: crate::wasi_impl::SubcontentEmission, store_data: &mut StoreData) {
         use crate::bindings_context::{SubContentEmission, SubContentData};
+        use crate::wasi_impl::SubcontentEmissionData;
 
         tracing::debug!("Processed subcontent emission: {}", emission.filename);
 
+        let data = match emission.data {
+            SubcontentEmissionData::Bytes(bytes) => SubContentData::Bytes(bytes),
+            SubcontentEmissionData::Slice { offset, length } => SubContentData::Slice { offset, length },
+        };
+
         store_data.processing_ctx.subcontent.push(SubContentEmission {
-            // emission.data is already bytes::Bytes (zero-copy from in-memory filesystem)
-            data: SubContentData::Bytes(emission.data),
+            data,
             filename: emission.filename,
         });
     }

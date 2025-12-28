@@ -115,8 +115,10 @@ public class Program
                 {
                     // Use .txt extension to make it clear this is not JSON
                     var filename = $"{path}.txt";
-                    SubContentWriter.EmitText(filename, value);
-                    SubContentWriter.Flush();
+                    var emitter = SubContentWriter.Emit(filename);
+                    var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+                    emitter.Stream.Write(bytes, 0, bytes.Length);
+                    emitter.Complete();
                     Console.Error.WriteLine($"C#: Emitted subcontent '{filename}' ({value.Length} bytes)");
                 }
                 break;

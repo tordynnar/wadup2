@@ -9,6 +9,7 @@ This library provides the interface between C# WASM modules and the WADUP host r
 - Table schema definition
 - Row insertion
 - Metadata serialization
+- Sub-content emission (zero-copy streaming and slice references)
 - File-based communication with WADUP
 
 ## Installation
@@ -109,23 +110,27 @@ Emit sub-content for recursive processing by WADUP:
 ```csharp
 using CSharpWadupGuest;
 
-// Emit raw bytes as sub-content
-SubContentWriter.Emit("extracted.bin", byteArray);
+// Emit data with streaming (zero-copy)
+var emitter = SubContentWriter.Emit("extracted.bin");
+emitter.Stream.Write(data, 0, data.Length);  // Write directly to the stream
+emitter.Complete();  // Close stream and trigger WADUP processing
 
-// Emit text as sub-content (encoded as UTF-8)
-SubContentWriter.EmitText("extracted.txt", "Hello, world!");
-
-// IMPORTANT: Flush to send sub-content to WADUP
-SubContentWriter.Flush();
+// Emit a slice of the input as sub-content (zero-copy, no data copied)
+SubContentWriter.EmitSlice("embedded.dat", offset: 100, length: 500);
 ```
 
-Sub-content is written as paired files with **zero-copy** data handling:
-- `/subcontent/data_N.bin` - Raw binary data (write first)
-- `/subcontent/metadata_N.json` - Filename metadata (write last to trigger processing)
+**Two emission modes (both zero-copy):**
+
+1. **Streaming data** (`Emit`): Returns an emitter for direct stream writing:
+   - Write to `emitter.Stream` (writes directly to `/subcontent/data_N.bin`)
+   - Call `emitter.Complete()` to close data and write metadata
+
+2. **Slice reference** (`EmitSlice`): References a range of the input content:
+   - No data copying, just offset and length in metadata
 
 When the metadata file is closed, WADUP:
-1. Pairs it with the matching data file
-2. Extracts the data as `Bytes` without copying (freezes `BytesMut` → `Bytes`)
+1. For streaming data: Extracts the data file as `Bytes` without copying
+2. For slice: Uses the offset/length to reference the parent content directly
 3. Queues the sub-content for recursive processing by all modules
 
 The data flows from your WASM write directly to nested processing without any memory copies.
@@ -225,9 +230,13 @@ Note: `Nullable` is disabled to avoid TypeLoadException in WASI.
 - `Flush()` - Write all accumulated metadata to file
 
 **SubContentWriter**
-- `Emit(string filename, byte[] data)` - Queue sub-content for emission
-- `EmitText(string filename, string text)` - Queue text sub-content (UTF-8 encoded)
-- `Flush()` - Write all queued sub-content to file
+- `Emit(string filename)` - Begin streaming emission, returns `SubContentEmitter`
+- `EmitSlice(string filename, long offset, long length)` - Emit slice of input (zero-copy)
+
+**SubContentEmitter**
+- `Stream` - Stream to write data to (writes directly to filesystem)
+- `Complete()` - Close stream and write metadata to trigger WADUP processing
+- `Dispose()` - Cancel emission if not completed
 
 ### Enums
 
@@ -267,7 +276,7 @@ csharp-wadup-guest/
 ├── README.md                 # This file
 ├── CSharpWadupGuest.csproj   # Project file
 ├── Table.cs                  # TableBuilder, Table, MetadataWriter
-├── SubContent.cs             # SubContentWriter for sub-content emission
+├── SubContent.cs             # SubContentWriter, SubContentEmitter (zero-copy emission)
 ├── Types.cs                  # DataType, Column, Value
 └── WadupException.cs         # Exception class
 ```
