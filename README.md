@@ -48,6 +48,7 @@ Each WASM module runs in a sandboxed virtual filesystem where:
 - **`/data.bin`** - The content being processed (read-only, zero-copy reference)
 - **`/tmp/`** - Available for temporary files (read-write)
 - **`/metadata/`** - For file-based metadata output (C# modules)
+- **`/subcontent/`** - For file-based sub-content emission (C# modules)
 
 Modules can access content using standard file I/O operations. The `/data.bin` file is a zero-copy reference to the content data, implemented using `bytes::Bytes` for optimal memory efficiency.
 
@@ -99,8 +100,9 @@ These are wrapped by language-specific guest libraries (`wadup-guest`, `python-w
 
 #### 2. File-Based Communication (C#)
 
-Modules write JSON metadata to `/metadata/*.json` files:
+Modules write JSON to special directories:
 
+**Metadata** (`/metadata/*.json`):
 ```json
 {
   "tables": [
@@ -112,16 +114,25 @@ Modules write JSON metadata to `/metadata/*.json` files:
 }
 ```
 
-WADUP processes metadata files immediately when closed (via `fd_close`), then deletes them. Any remaining files are processed after `_start` completes.
+**Sub-Content** (paired files, zero-copy):
+- `/subcontent/data_N.bin` - Raw binary data (written directly to `BytesMut`)
+- `/subcontent/metadata_N.json` - Filename metadata (write last to trigger processing)
+```json
+{"filename": "extracted.txt"}
+```
+
+WADUP processes these files immediately when the metadata file is closed (via `fd_close`). The data is extracted as `Bytes` without copying (the `BytesMut` is frozen directly into `Bytes`), then passed to nested processing zero-copy.
 
 **Advantages:**
 - Works with languages that don't support custom WASM imports (like .NET WASI SDK)
 - Uses standard file I/O (no FFI complexity)
 - Incremental flushing supported (write multiple files during processing)
+- Both metadata and sub-content supported via file-based interface
+- **Zero-copy sub-content**: Data flows from WASM write → nested processing without copying
 
 **Trade-offs:**
 - Module reloaded for each file (command pattern)
-- File I/O overhead (~200ms per file for .NET runtime initialization)
+- Per-file overhead (~200ms for .NET runtime initialization)
 
 ### Example: File Size Counter (Rust)
 
@@ -269,9 +280,11 @@ Language-specific libraries for WASM module authors:
 
 **csharp-wadup-guest** (C#):
 - File-based metadata output (writes JSON to `/metadata/*.json`)
+- File-based sub-content emission (writes JSON to `/subcontent/*.json`)
 - Table builder API: `new TableBuilder("name").AddColumn(...).Build()`
 - Value factory methods: `Value.FromInt64()`, `Value.FromString()`, `Value.FromFloat64()`
 - `MetadataWriter.Flush()` writes and closes metadata files for immediate processing
+- `SubContentWriter.Emit()` / `SubContentWriter.Flush()` for sub-content emission
 
 ### wadup-cli
 Command-line interface for running WADUP processing jobs.

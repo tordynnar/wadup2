@@ -34,7 +34,9 @@ pub struct SubContentEmission {
 }
 
 pub enum SubContentData {
-    Bytes(Vec<u8>),
+    /// Owned bytes data (zero-copy: wraps bytes::Bytes directly)
+    Bytes(bytes::Bytes),
+    /// Slice of parent content (zero-copy reference)
     Slice { offset: usize, length: usize },
 }
 

@@ -702,6 +702,13 @@ fn test_csharp_json_analyzer() {
         "Expected at least 5 metadata files processed on fd_close, got {}. \
          This verifies incremental metadata processing.", fd_close_count);
 
+    // Verify subcontent is processed on fd_close
+    // The JSON has 2 string values: "test" (name) and "b" (nested.a)
+    let subcontent_count = stderr.matches("WADUP: Processing subcontent on fd_close").count();
+    assert!(subcontent_count >= 2,
+        "Expected at least 2 subcontent files processed on fd_close, got {}. \
+         This verifies file-based sub-content emission.", subcontent_count);
+
     // Verify the order: fd_close processing should happen BEFORE _start completes
     // Find the position of the first "_start completed" after all fd_close messages
     let last_fd_close_pos = stderr.rfind("WADUP: Processing metadata on fd_close")
@@ -754,13 +761,54 @@ fn test_csharp_json_analyzer() {
     assert_eq!(keys, vec!["a", "name", "nested", "values"],
         "Expected keys [a, name, nested, values], got {:?}", keys);
 
+    // Verify sub-content was emitted and processed
+    // The JSON has 2 string values that should be emitted as sub-content:
+    // - "test" (the value of "name")
+    // - "b" (the value of "nested.a")
+    let subcontent_entries: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM __wadup_content WHERE parent_uuid IS NOT NULL",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert!(subcontent_entries >= 2,
+        "Expected at least 2 sub-content entries (extracted string values), got {}", subcontent_entries);
+
+    // Verify that sub-content files have .txt extension (which the JSON analyzer ignores)
+    let txt_subcontent: Vec<String> = conn.prepare(
+        "SELECT filename FROM __wadup_content WHERE parent_uuid IS NOT NULL AND filename LIKE '%.txt'"
+    ).unwrap()
+    .query_map([], |row| row.get(0))
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap();
+    assert!(txt_subcontent.len() >= 2,
+        "Expected at least 2 .txt sub-content files, got {:?}", txt_subcontent);
+
+    // Verify no infinite recursion: the .txt files should NOT have child sub-content
+    // (since they're not JSON and the JSON analyzer returns early)
+    let grandchild_content: i64 = conn.query_row(
+        r#"SELECT COUNT(*) FROM __wadup_content c1
+           JOIN __wadup_content c2 ON c2.parent_uuid = c1.uuid
+           JOIN __wadup_content c3 ON c3.parent_uuid = c2.uuid"#,
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(grandchild_content, 0,
+        "Expected no grandchild content (would indicate infinite recursion), got {}", grandchild_content);
+
     println!("✓ C# JSON analyzer verified:");
     println!("  - Metadata files processed on fd_close: {}", fd_close_count);
+    println!("  - Subcontent files processed on fd_close: {}", subcontent_count);
     println!("  - _start completed count: {}", start_completed_count);
     println!("  - json_metadata rows: {}", json_metadata_count);
     println!("  - json_keys rows: {}", json_keys_count);
     println!("  - max_depth: {}", max_depth);
     println!("  - total_keys: {}", total_keys);
     println!("  - Keys: {:?}", keys);
+    println!("  - Sub-content entries: {}", subcontent_entries);
+    println!("  - .txt sub-content files: {:?}", txt_subcontent);
+    println!("  - Grandchild content (recursion check): {}", grandchild_content);
     println!("✓ Incremental metadata processing verified!");
+    println!("✓ File-based sub-content emission verified!");
+    println!("✓ No infinite recursion verified!");
 }

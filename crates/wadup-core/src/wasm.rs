@@ -451,7 +451,7 @@ impl ModuleInstance {
         )?;
 
         // fd_close - Close file descriptor
-        // Also processes metadata files immediately when closed
+        // Also processes metadata and subcontent files immediately when closed
         linker.func_wrap(
             "wasi_snapshot_preview1",
             "fd_close",
@@ -465,6 +465,12 @@ impl ModuleInstance {
                     if let Err(e) = Self::process_metadata_content(&content, caller.data_mut()) {
                         tracing::warn!("Failed to process metadata on close: {}", e);
                     }
+                }
+
+                // If this was a subcontent emission (paired data+metadata files), process it immediately
+                if let Some(emission) = close_result.subcontent_emission {
+                    eprintln!("WADUP: Processing subcontent on fd_close: {} ({} bytes)", emission.filename, emission.data.len());
+                    Self::process_subcontent_emission(emission, caller.data_mut());
                 }
 
                 Ok(errno as i32)
@@ -966,7 +972,8 @@ impl ModuleInstance {
                 memory.read(&caller, data_ptr as usize, &mut data)?;
                 let filename = read_string(&mut caller, memory, fname_ptr, fname_len)?;
                 caller.data_mut().processing_ctx.subcontent.push(SubContentEmission {
-                    data: SubContentData::Bytes(data),
+                    // Convert Vec<u8> to Bytes (takes ownership of allocation, no copy)
+                    data: SubContentData::Bytes(bytes::Bytes::from(data)),
                     filename,
                 });
                 Ok(0)
@@ -1087,6 +1094,7 @@ impl ModuleInstance {
         let filesystem = Arc::new(MemoryFilesystem::new());
         filesystem.create_dir_all("/tmp")?;
         filesystem.create_dir_all("/metadata")?;
+        filesystem.create_dir_all("/subcontent")?;
         filesystem.create_file("/data.bin", content_data.to_bytes().to_vec())?;
 
         let wasi_ctx = WasiCtx::new(filesystem.clone());
@@ -1227,6 +1235,23 @@ impl ModuleInstance {
 
         tracing::debug!("Processed metadata content ({} bytes)", content.len());
         Ok(())
+    }
+
+    /// Process a subcontent emission (paired data+metadata files) and add to store data.
+    ///
+    /// This is called immediately when a /subcontent/metadata_N.json file is closed.
+    /// The matching /subcontent/data_N.bin file provides the raw data as Bytes (zero-copy:
+    /// the BytesMut from the in-memory filesystem is frozen directly into Bytes).
+    fn process_subcontent_emission(emission: crate::wasi_impl::SubcontentEmission, store_data: &mut StoreData) {
+        use crate::bindings_context::{SubContentEmission, SubContentData};
+
+        tracing::debug!("Processed subcontent emission: {}", emission.filename);
+
+        store_data.processing_ctx.subcontent.push(SubContentEmission {
+            // emission.data is already bytes::Bytes (zero-copy from in-memory filesystem)
+            data: SubContentData::Bytes(emission.data),
+            filename: emission.filename,
+        });
     }
 
     /// Process any remaining metadata files after _start completes.

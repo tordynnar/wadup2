@@ -102,6 +102,41 @@ MetadataWriter.Flush();
 
 This writes the accumulated metadata to `/metadata/output_0.json` for WADUP to read.
 
+### SubContentWriter (Sub-Content Emission)
+
+Emit sub-content for recursive processing by WADUP:
+
+```csharp
+using CSharpWadupGuest;
+
+// Emit raw bytes as sub-content
+SubContentWriter.Emit("extracted.bin", byteArray);
+
+// Emit text as sub-content (encoded as UTF-8)
+SubContentWriter.EmitText("extracted.txt", "Hello, world!");
+
+// IMPORTANT: Flush to send sub-content to WADUP
+SubContentWriter.Flush();
+```
+
+Sub-content is written as paired files with **zero-copy** data handling:
+- `/subcontent/data_N.bin` - Raw binary data (write first)
+- `/subcontent/metadata_N.json` - Filename metadata (write last to trigger processing)
+
+When the metadata file is closed, WADUP:
+1. Pairs it with the matching data file
+2. Extracts the data as `Bytes` without copying (freezes `BytesMut` → `Bytes`)
+3. Queues the sub-content for recursive processing by all modules
+
+The data flows from your WASM write directly to nested processing without any memory copies.
+
+**Avoiding Infinite Recursion:**
+
+If your module might process its own emitted sub-content, ensure the sub-content is distinguishable:
+- Use different file extensions (e.g., emit `.txt` from a JSON analyzer)
+- Check content signatures at the start of processing
+- Use parent UUID tracking in the database to detect recursion
+
 ## How It Works
 
 Unlike Rust, Go, or Python modules which use FFI imports, C# modules use file-based communication:
@@ -189,6 +224,11 @@ Note: `Nullable` is disabled to avoid TypeLoadException in WASI.
 **MetadataWriter**
 - `Flush()` - Write all accumulated metadata to file
 
+**SubContentWriter**
+- `Emit(string filename, byte[] data)` - Queue sub-content for emission
+- `EmitText(string filename, string text)` - Queue text sub-content (UTF-8 encoded)
+- `Flush()` - Write all queued sub-content to file
+
 ### Enums
 
 **DataType**
@@ -227,6 +267,7 @@ csharp-wadup-guest/
 ├── README.md                 # This file
 ├── CSharpWadupGuest.csproj   # Project file
 ├── Table.cs                  # TableBuilder, Table, MetadataWriter
+├── SubContent.cs             # SubContentWriter for sub-content emission
 ├── Types.cs                  # DataType, Column, Value
 └── WadupException.cs         # Exception class
 ```

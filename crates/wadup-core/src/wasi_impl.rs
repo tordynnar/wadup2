@@ -48,9 +48,17 @@ enum FileHandle {
     Stderr,
 }
 
-/// Result of closing a file - may contain metadata if it was a /metadata/*.json file
+/// Sub-content emission data (paired data + metadata files)
+pub struct SubcontentEmission {
+    pub filename: String,
+    /// The sub-content data as Bytes (zero-copy from the in-memory filesystem)
+    pub data: bytes::Bytes,
+}
+
+/// Result of closing a file - may contain metadata or subcontent if it was a special file
 pub struct CloseResult {
     pub metadata_content: Option<Vec<u8>>,
+    pub subcontent_emission: Option<SubcontentEmission>,
 }
 
 /// WASI context with in-memory filesystem
@@ -83,6 +91,19 @@ impl WasiCtx {
         let fd = *next;
         *next += 1;
         fd
+    }
+
+    /// Check if a path should be tracked for special handling on close
+    fn should_track_path(path: &str) -> Option<String> {
+        if path.starts_with("/metadata/") && path.ends_with(".json") {
+            Some(path.to_string())
+        } else if path.starts_with("/subcontent/metadata_") && path.ends_with(".json") {
+            Some(path.to_string())
+        } else if path.starts_with("/subcontent/data_") {
+            Some(path.to_string())
+        } else {
+            None
+        }
     }
 
     /// path_open - Open a file or directory
@@ -141,12 +162,8 @@ impl WasiCtx {
                         return Errno::Exist;
                     }
                     let new_fd = self.allocate_fd();
-                    // Track path for metadata files
-                    let track_path = if normalized_path.starts_with("/metadata/") {
-                        Some(normalized_path.clone())
-                    } else {
-                        None
-                    };
+                    // Track path for metadata and subcontent files
+                    let track_path = Self::should_track_path(&normalized_path);
                     self.file_table.write().insert(new_fd, FileHandle::File(file, track_path));
                     *fd_out = new_fd;
                     Errno::Success
@@ -160,12 +177,8 @@ impl WasiCtx {
                                 match self.filesystem.open_file(path) {
                                     Ok(file) => {
                                         let new_fd = self.allocate_fd();
-                                        // Track path for metadata files
-                                        let track_path = if normalized_path.starts_with("/metadata/") {
-                                            Some(normalized_path.clone())
-                                        } else {
-                                            None
-                                        };
+                                        // Track path for metadata and subcontent files
+                                        let track_path = Self::should_track_path(&normalized_path);
                                         self.file_table.write().insert(new_fd, FileHandle::File(file, track_path));
                                         *fd_out = new_fd;
                                         Errno::Success
@@ -301,11 +314,11 @@ impl WasiCtx {
     }
 
     /// fd_close - Close file descriptor
-    /// Returns CloseResult with metadata content if this was a /metadata/*.json file
+    /// Returns CloseResult with metadata/subcontent content if this was a special file
     pub fn fd_close(&self, fd: Fd) -> (Errno, CloseResult) {
         if fd <= 2 {
             // Don't close stdio
-            return (Errno::Success, CloseResult { metadata_content: None });
+            return (Errno::Success, CloseResult { metadata_content: None, subcontent_emission: None });
         }
 
         let mut file_table = self.file_table.write();
@@ -322,11 +335,62 @@ impl WasiCtx {
                     let _ = parent_dir.remove(&filename);
                 }
 
-                (Errno::Success, CloseResult { metadata_content: content })
+                (Errno::Success, CloseResult { metadata_content: content, subcontent_emission: None })
             }
-            Some(_) => (Errno::Success, CloseResult { metadata_content: None }),
-            None => (Errno::Badf, CloseResult { metadata_content: None }),
+            Some(FileHandle::File(_, Some(path))) if path.starts_with("/subcontent/metadata_") && path.ends_with(".json") => {
+                // This is a subcontent metadata file - find matching data file
+                // Path format: /subcontent/metadata_N.json -> /subcontent/data_N.bin
+                let emission = self.process_subcontent_metadata(&path);
+
+                (Errno::Success, CloseResult { metadata_content: None, subcontent_emission: emission })
+            }
+            Some(FileHandle::File(_, Some(path))) if path.starts_with("/subcontent/data_") => {
+                // This is a subcontent data file - just close it, don't process
+                // It will be processed when the matching metadata file is closed
+                (Errno::Success, CloseResult { metadata_content: None, subcontent_emission: None })
+            }
+            Some(_) => (Errno::Success, CloseResult { metadata_content: None, subcontent_emission: None }),
+            None => (Errno::Badf, CloseResult { metadata_content: None, subcontent_emission: None }),
         }
+    }
+
+    /// Process a subcontent metadata file and find matching data file (zero-copy).
+    ///
+    /// The data file is extracted as Bytes without copying - the BytesMut from the
+    /// in-memory filesystem is frozen directly into Bytes.
+    fn process_subcontent_metadata(&self, metadata_path: &str) -> Option<SubcontentEmission> {
+        // Extract N from /subcontent/metadata_N.json
+        let filename = metadata_path.trim_start_matches("/subcontent/");
+        let n = filename
+            .strip_prefix("metadata_")
+            .and_then(|s| s.strip_suffix(".json"))?;
+
+        // Read metadata file to get the target filename
+        let metadata_content = self.filesystem.read_file(metadata_path).ok()?;
+        let metadata_str = String::from_utf8(metadata_content).ok()?;
+
+        // Parse JSON to get filename
+        // Format: {"filename": "extracted.txt"}
+        #[derive(serde::Deserialize)]
+        struct SubcontentMetadata {
+            filename: String,
+        }
+        let metadata: SubcontentMetadata = serde_json::from_str(&metadata_str).ok()?;
+
+        // Take ownership of the data file as Bytes (zero-copy: freezes BytesMut into Bytes)
+        // This also removes the file from the filesystem
+        let data_path = format!("/subcontent/data_{}.bin", n);
+        let data = self.filesystem.take_file_bytes(&data_path).ok()?;
+
+        // Delete the metadata file (data file was already removed by take_file_bytes)
+        if let Ok((parent_dir, filename)) = self.resolve_path(metadata_path) {
+            let _ = parent_dir.remove(&filename);
+        }
+
+        Some(SubcontentEmission {
+            filename: metadata.filename,
+            data,
+        })
     }
 
     /// fd_filestat_get - Get file metadata

@@ -54,6 +54,22 @@ impl MemoryFile {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Take ownership of the file data as Bytes (zero-copy for read-write files).
+    ///
+    /// For ReadWrite files, this freezes the BytesMut into Bytes without copying.
+    /// For ReadOnly files, this clones the Bytes reference (cheap).
+    /// After calling this, the file will be empty.
+    pub fn take_bytes(&self) -> Bytes {
+        match &self.data {
+            MemoryFileData::ReadOnly(bytes) => bytes.clone(),
+            MemoryFileData::ReadWrite(buf) => {
+                let mut guard = buf.write();
+                // Take the BytesMut and freeze it into Bytes (zero-copy)
+                std::mem::take(&mut *guard).freeze()
+            }
+        }
+    }
 }
 
 impl Read for MemoryFile {
@@ -240,6 +256,29 @@ impl MemoryDirectory {
         })?;
         Ok(())
     }
+
+    /// Remove a file and return its data as Bytes (zero-copy).
+    ///
+    /// This removes the file from the directory and returns its contents
+    /// as Bytes without copying the underlying data.
+    pub fn take_file_bytes(&self, name: &str) -> io::Result<Bytes> {
+        let mut entries = self.entries.write();
+        match entries.remove(name) {
+            Some(Entry::File(file)) => Ok(file.take_bytes()),
+            Some(Entry::Directory(_)) => {
+                // Put it back - this was a directory, not a file
+                entries.insert(name.to_string(), Entry::Directory(MemoryDirectory::new()));
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Path is a directory",
+                ))
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "File not found",
+            )),
+        }
+    }
 }
 
 /// Root filesystem with path resolution
@@ -355,6 +394,15 @@ impl MemoryFilesystem {
         let mut contents = Vec::new();
         file.read_to_end(&mut contents)?;
         Ok(contents)
+    }
+
+    /// Remove a file and return its data as Bytes (zero-copy).
+    ///
+    /// This removes the file from the filesystem and returns its contents
+    /// as Bytes without copying the underlying data.
+    pub fn take_file_bytes(&self, path: &str) -> io::Result<Bytes> {
+        let (parent_dir, filename) = self.resolve_path(path)?;
+        parent_dir.take_file_bytes(&filename)
     }
 }
 

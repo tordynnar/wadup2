@@ -278,7 +278,8 @@ impl WorkerThread {
         for subcontent_emission in all_subcontent {
             let subcontent_data = match subcontent_emission.data {
                 SubContentData::Bytes(bytes) => {
-                    let buffer = crate::shared_buffer::SharedBuffer::from_vec(bytes);
+                    // Zero-copy: SharedBuffer wraps the Bytes directly
+                    let buffer = crate::shared_buffer::SharedBuffer::from_bytes(bytes);
                     let uuid = uuid::Uuid::new_v4();
                     self.content_store.insert(uuid, buffer.clone());
                     ContentData::Owned(buffer)

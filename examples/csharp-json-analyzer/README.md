@@ -25,6 +25,10 @@ This example demonstrates how to build WASM modules for WADUP using **.NET 8** w
    - `total_objects` (Int64) - Number of objects
    - `parser_used` (String) - Parser library used
    - `size_bytes` (Int64) - Input size
+5. Outputs each unique key to `json_keys` table with columns:
+   - `key_name` (String) - The key name
+   - `occurrence_count` (Int64) - How many times it appears
+6. Emits string values as sub-content (.txt files) for recursive processing
 
 ## Prerequisites
 
@@ -140,6 +144,24 @@ table.InsertRow(
 MetadataWriter.Flush();
 ```
 
+**Emit Sub-Content:**
+```csharp
+// Emit raw bytes as sub-content
+SubContentWriter.Emit("extracted.bin", byteArray);
+
+// Emit text as sub-content (UTF-8 encoded)
+SubContentWriter.EmitText("extracted.txt", "Hello, world!");
+
+// Flush to write sub-content files
+SubContentWriter.Flush();
+```
+
+Each emission creates two files with **zero-copy** data handling:
+- `/subcontent/data_N.bin` - Raw binary data (write first)
+- `/subcontent/metadata_N.json` - Filename metadata (write last to trigger processing)
+
+When the metadata file is closed, WADUP extracts the data without copying and queues it for recursive processing. To avoid infinite recursion, emit content that won't trigger your own module (e.g., emit `.txt` from a JSON analyzer).
+
 **Data Types:**
 - `DataType.Int64` - 64-bit signed integer
 - `DataType.Float64` - 64-bit floating point
@@ -162,9 +184,14 @@ MetadataWriter.Flush();
 **3. File-Based Metadata**
 - Write to `/metadata/*.json`
 - No custom WASM imports needed
-- WADUP processes files after execution
+- WADUP processes files immediately on close
 
-**4. Standard .NET Libraries**
+**4. Zero-Copy Sub-Content**
+- Write data to `/subcontent/data_N.bin`, metadata to `/subcontent/metadata_N.json`
+- WADUP extracts data without copying (BytesMut → Bytes freeze)
+- Efficient recursive processing of extracted content
+
+**5. Standard .NET Libraries**
 - System.Text.Json works perfectly
 - Newtonsoft.Json also works (included in project)
 - Most pure-managed libraries work
@@ -259,6 +286,7 @@ examples/csharp-json-analyzer/
 csharp-wadup-guest/            # Shared library
 ├── CSharpWadupGuest.csproj
 ├── Table.cs                   # TableBuilder, MetadataWriter
+├── SubContent.cs              # SubContentWriter for sub-content emission
 ├── Types.cs                   # DataType, Value, Column
 └── WadupException.cs
 ```

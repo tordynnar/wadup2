@@ -1,4 +1,5 @@
 using CSharpWadupGuest;
+using System.Text.Json;
 
 public class Program
 {
@@ -78,6 +79,64 @@ public class Program
         }
 
         Console.Error.WriteLine($"C#: All {batchNum - 1} metadata flushes complete");
+
+        // Emit sub-content: extract string values as plain text files
+        // This demonstrates file-based sub-content emission.
+        // The sub-content is plain text, not JSON, so it won't trigger the JSON analyzer
+        // and won't cause infinite recursion.
+        EmitStringValues(content);
+    }
+
+    /// <summary>
+    /// Extract string values from JSON and emit them as plain text sub-content.
+    /// These are emitted as .txt files which won't be processed by the JSON analyzer.
+    /// </summary>
+    private static void EmitStringValues(string jsonContent)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonContent);
+            EmitStringsFromElement(doc.RootElement, "root");
+        }
+        catch
+        {
+            // Not valid JSON, skip
+        }
+    }
+
+    private static void EmitStringsFromElement(JsonElement element, string path)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.String:
+                // Emit this string value as a plain text sub-content file
+                var value = element.GetString();
+                if (!string.IsNullOrEmpty(value))
+                {
+                    // Use .txt extension to make it clear this is not JSON
+                    var filename = $"{path}.txt";
+                    SubContentWriter.EmitText(filename, value);
+                    SubContentWriter.Flush();
+                    Console.Error.WriteLine($"C#: Emitted subcontent '{filename}' ({value.Length} bytes)");
+                }
+                break;
+
+            case JsonValueKind.Object:
+                foreach (var prop in element.EnumerateObject())
+                {
+                    EmitStringsFromElement(prop.Value, $"{path}_{prop.Name}");
+                }
+                break;
+
+            case JsonValueKind.Array:
+                int i = 0;
+                foreach (var item in element.EnumerateArray())
+                {
+                    EmitStringsFromElement(item, $"{path}_{i}");
+                    i++;
+                }
+                break;
+        }
     }
 
     // Main entry point - returns int for WASM compatibility
