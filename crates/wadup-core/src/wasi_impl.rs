@@ -81,12 +81,18 @@ impl WasiCtx {
     }
 
     /// path_open - Open a file or directory
+    ///
+    /// oflags bits:
+    /// - bit 0: O_CREAT - create file if it doesn't exist
+    /// - bit 1: O_DIRECTORY - expect a directory
+    /// - bit 2: O_EXCL - error if file exists when O_CREAT is set
+    /// - bit 3: O_TRUNC - truncate file to 0 on open
     pub fn path_open(
         &self,
         dirfd: Fd,
         _dirflags: u32,
         path: &str,
-        _oflags: u16,
+        oflags: u16,
         _fs_rights_base: u64,
         _fs_rights_inheriting: u64,
         _fdflags: u16,
@@ -97,29 +103,75 @@ impl WasiCtx {
             return Errno::Badf;
         }
 
-        // Try to open as file first
-        match self.filesystem.open_file(path) {
-            Ok(file) => {
-                let new_fd = self.allocate_fd();
-                self.file_table.write().insert(new_fd, FileHandle::File(file));
-                *fd_out = new_fd;
-                Errno::Success
-            }
-            Err(_) => {
-                // Try as directory
-                let (parent_dir, filename) = match self.resolve_path(path) {
-                    Ok(v) => v,
-                    Err(e) => return e,
-                };
+        let o_creat = (oflags & 1) != 0;
+        let o_directory = (oflags & 2) != 0;
+        let o_excl = (oflags & 4) != 0;
+        let _o_trunc = (oflags & 8) != 0; // TODO: implement truncation
 
-                match parent_dir.get_dir(&filename) {
-                    Ok(dir) => {
-                        let new_fd = self.allocate_fd();
-                        self.file_table.write().insert(new_fd, FileHandle::Directory(dir, 0));
-                        *fd_out = new_fd;
-                        Errno::Success
+        // If O_DIRECTORY is set, only open as directory
+        if o_directory {
+            let (parent_dir, filename) = match self.resolve_path(path) {
+                Ok(v) => v,
+                Err(e) => return e,
+            };
+
+            match parent_dir.get_dir(&filename) {
+                Ok(dir) => {
+                    let new_fd = self.allocate_fd();
+                    self.file_table.write().insert(new_fd, FileHandle::Directory(dir, 0));
+                    *fd_out = new_fd;
+                    Errno::Success
+                }
+                Err(_) => Errno::Noent,
+            }
+        } else {
+            // Try to open as file first
+            match self.filesystem.open_file(path) {
+                Ok(file) => {
+                    if o_excl && o_creat {
+                        // O_EXCL with O_CREAT means error if file exists
+                        return Errno::Exist;
                     }
-                    Err(_) => Errno::Noent,
+                    let new_fd = self.allocate_fd();
+                    self.file_table.write().insert(new_fd, FileHandle::File(file));
+                    *fd_out = new_fd;
+                    Errno::Success
+                }
+                Err(_) => {
+                    // File doesn't exist
+                    if o_creat {
+                        // Create new file
+                        match self.filesystem.create_file(path, Vec::new()) {
+                            Ok(_) => {
+                                match self.filesystem.open_file(path) {
+                                    Ok(file) => {
+                                        let new_fd = self.allocate_fd();
+                                        self.file_table.write().insert(new_fd, FileHandle::File(file));
+                                        *fd_out = new_fd;
+                                        Errno::Success
+                                    }
+                                    Err(_) => Errno::Io,
+                                }
+                            }
+                            Err(_) => Errno::Io,
+                        }
+                    } else {
+                        // Try as directory
+                        let (parent_dir, filename) = match self.resolve_path(path) {
+                            Ok(v) => v,
+                            Err(e) => return e,
+                        };
+
+                        match parent_dir.get_dir(&filename) {
+                            Ok(dir) => {
+                                let new_fd = self.allocate_fd();
+                                self.file_table.write().insert(new_fd, FileHandle::Directory(dir, 0));
+                                *fd_out = new_fd;
+                                Errno::Success
+                            }
+                            Err(_) => Errno::Noent,
+                        }
+                    }
                 }
             }
         }

@@ -2,6 +2,12 @@
 target/
 Cargo.lock
 
+# .NET / C#
+bin/
+obj/
+*.user
+*.suo
+
 # WASM build artifacts
 *.wasm
 examples/*/target/

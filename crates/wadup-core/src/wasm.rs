@@ -26,9 +26,16 @@ pub struct WasmRuntime {
     limits: ResourceLimits,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ModuleStyle {
+    Reactor,  // Has 'process' export, reusable
+    Command,  // Has '_start' export, needs reload-on-call
+}
+
 pub struct ModuleInfo {
     pub name: String,
     pub module: Module,
+    pub style: ModuleStyle,
 }
 
 impl WasmRuntime {
@@ -69,11 +76,15 @@ impl WasmRuntime {
 
                 let module = Module::from_file(&self.engine, &path)?;
 
-                // Validate module exports
-                self.validate_module(&module)?;
+                // Validate module exports and determine style
+                let style = self.validate_module(&module)?;
 
-                tracing::info!("Loaded WASM module: {}", name);
-                self.modules.push(ModuleInfo { name, module });
+                let style_str = match style {
+                    ModuleStyle::Reactor => "reactor",
+                    ModuleStyle::Command => "command",
+                };
+                tracing::info!("Loaded WASM module: {} ({})", name, style_str);
+                self.modules.push(ModuleInfo { name, module, style });
             }
         }
 
@@ -84,15 +95,19 @@ impl WasmRuntime {
         Ok(())
     }
 
-    fn validate_module(&self, module: &Module) -> Result<()> {
+    fn validate_module(&self, module: &Module) -> Result<ModuleStyle> {
         let has_process = module.exports()
             .any(|export| export.name() == "process");
+        let has_start = module.exports()
+            .any(|export| export.name() == "_start");
 
-        if !has_process {
-            anyhow::bail!("Module missing required 'process' function");
+        if has_process {
+            Ok(ModuleStyle::Reactor)
+        } else if has_start {
+            Ok(ModuleStyle::Command)
+        } else {
+            anyhow::bail!("Module missing required 'process' or '_start' export");
         }
-
-        Ok(())
     }
 
     pub fn create_instances(
@@ -106,6 +121,7 @@ impl WasmRuntime {
                 &self.engine,
                 &module_info.module,
                 &module_info.name,
+                module_info.style,
                 &self.limits,
                 metadata_store.clone(),
             )?;
@@ -139,11 +155,15 @@ impl ResourceLimiter for ResourceLimiterImpl {
 }
 
 pub struct ModuleInstance {
+    engine: Engine,
+    module: Module,
     store: Store<StoreData>,
     instance: Instance,
     name: String,
+    style: ModuleStyle,
     fuel_limit: Option<u64>,
     metadata_store: MetadataStore,
+    limits: ResourceLimits,
     _limiter: Option<Box<ResourceLimiterImpl>>,
 }
 
@@ -152,6 +172,7 @@ impl ModuleInstance {
         engine: &Engine,
         module: &Module,
         name: &str,
+        style: ModuleStyle,
         limits: &ResourceLimits,
         metadata_store: MetadataStore,
     ) -> Result<Self> {
@@ -207,11 +228,15 @@ impl ModuleInstance {
         }
 
         Ok(Self {
+            engine: engine.clone(),
+            module: module.clone(),
             store,
             instance,
             name: name.to_string(),
+            style,
             fuel_limit: limits.fuel,
             metadata_store,
+            limits: limits.clone(),
             _limiter: _limiter_box,
         })
     }
@@ -969,6 +994,17 @@ impl ModuleInstance {
         content_uuid: uuid::Uuid,
         content_data: crate::shared_buffer::SharedBuffer,
     ) -> Result<ProcessingContext> {
+        match self.style {
+            ModuleStyle::Reactor => self.process_content_reactor(content_uuid, content_data),
+            ModuleStyle::Command => self.process_content_command(content_uuid, content_data),
+        }
+    }
+
+    fn process_content_reactor(
+        &mut self,
+        content_uuid: uuid::Uuid,
+        content_data: crate::shared_buffer::SharedBuffer,
+    ) -> Result<ProcessingContext> {
         // Update /data.bin in the in-memory filesystem (zero-copy)
         let filesystem = &self.store.data().wasi_ctx.filesystem;
         filesystem.set_data_bin(content_data.to_bytes())?;
@@ -982,11 +1018,18 @@ impl ModuleInstance {
             self.store.set_fuel(fuel)?;
         }
 
-        // Call the process function
-        let process_func = self.instance
-            .get_typed_func::<(), i32>(&mut self.store, "process")?;
-
-        let result = process_func.call(&mut self.store, ());
+        // Call the process function - try () -> i32 first, then () -> () for compatibility
+        let result = if let Ok(process_func) = self.instance
+            .get_typed_func::<(), i32>(&mut self.store, "process")
+        {
+            process_func.call(&mut self.store, ()).map(|code| code)
+        } else if let Ok(process_func) = self.instance
+            .get_typed_func::<(), ()>(&mut self.store, "process")
+        {
+            process_func.call(&mut self.store, ()).map(|_| 0)
+        } else {
+            anyhow::bail!("Module '{}' process function has unsupported signature", self.name);
+        };
 
         // Check result
         match result {
@@ -1018,6 +1061,199 @@ impl ModuleInstance {
                 }
             }
         }
+    }
+
+    fn process_content_command(
+        &mut self,
+        content_uuid: uuid::Uuid,
+        content_data: crate::shared_buffer::SharedBuffer,
+    ) -> Result<ProcessingContext> {
+        // For command-style modules, we need to reinstantiate the module for each call
+        // Create a new store with fresh context
+        let ctx = ProcessingContext::new(content_uuid, content_data.clone());
+
+        // Create in-memory filesystem with /data.bin set to content
+        let filesystem = Arc::new(MemoryFilesystem::new());
+        filesystem.create_dir_all("/tmp")?;
+        filesystem.create_dir_all("/metadata")?;
+        filesystem.create_file("/data.bin", content_data.to_bytes().to_vec())?;
+
+        let wasi_ctx = WasiCtx::new(filesystem.clone());
+
+        let store_data = StoreData {
+            processing_ctx: ctx,
+            wasi_ctx,
+        };
+
+        let mut store = Store::new(&self.engine, store_data);
+
+        // Set fuel limit if specified
+        if let Some(fuel) = self.fuel_limit {
+            store.set_fuel(fuel)?;
+        }
+
+        // Create a new linker
+        let mut linker = Linker::new(&self.engine);
+        Self::add_wasi_functions(&mut linker)?;
+        Self::add_host_functions(&mut linker)?;
+
+        // Instantiate the module fresh
+        let instance = linker.instantiate(&mut store, &self.module)?;
+
+        // Call _start - try () -> i32 first, then () -> () for compatibility
+        let result = if let Ok(start_func) = instance.get_typed_func::<(), i32>(&mut store, "_start") {
+            start_func.call(&mut store, ()).map(|code| code)
+        } else if let Ok(start_func) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
+            start_func.call(&mut store, ()).map(|_| 0)
+        } else {
+            anyhow::bail!("Module '{}' _start function has unsupported signature", self.name);
+        };
+
+        // Check result - treat proc_exit(0) as success
+        let exit_code = match &result {
+            Ok(code) => *code,
+            Err(e) if e.to_string().contains("proc_exit called with code 0") => 0,
+            Err(e) => {
+                let error_msg = e.to_string();
+                if error_msg.contains("fuel") || error_msg.contains("out of fuel") {
+                    anyhow::bail!("Module '{}' exceeded fuel limit (CPU limit)", self.name)
+                } else if error_msg.contains("stack overflow") {
+                    anyhow::bail!("Module '{}' stack overflow", self.name)
+                } else if error_msg.contains("memory") {
+                    anyhow::bail!("Module '{}' memory limit exceeded", self.name)
+                } else {
+                    return Err(anyhow::anyhow!("{}", error_msg));
+                }
+            }
+        };
+
+        if exit_code == 0 {
+            // Success - process any metadata files written by the module
+            self.process_metadata_files(&filesystem, &mut store)?;
+
+            // Extract context
+            let ctx = &mut store.data_mut().processing_ctx;
+            let extracted = ProcessingContext {
+                content_uuid: ctx.content_uuid,
+                content_data: ctx.content_data.clone(),
+                subcontent: std::mem::take(&mut ctx.subcontent),
+                metadata: std::mem::take(&mut ctx.metadata),
+                table_schemas: std::mem::take(&mut ctx.table_schemas),
+            };
+            Ok(extracted)
+        } else {
+            anyhow::bail!("Module '{}' returned error code: {}", self.name, exit_code)
+        }
+    }
+
+    /// Process metadata files written by command-style modules.
+    ///
+    /// Files in /metadata/*.json are parsed and processed as either:
+    /// - Table definitions with "tables" array
+    /// - Row insertions with "rows" array
+    ///
+    /// Format:
+    /// ```json
+    /// {
+    ///   "tables": [
+    ///     { "name": "table_name", "columns": [{ "name": "col", "data_type": "Int64" }] }
+    ///   ],
+    ///   "rows": [
+    ///     { "table_name": "table_name", "values": [{ "Int64": 42 }] }
+    ///   ]
+    /// }
+    /// ```
+    fn process_metadata_files(
+        &self,
+        filesystem: &Arc<MemoryFilesystem>,
+        store: &mut Store<StoreData>,
+    ) -> Result<()> {
+        use crate::bindings_context::MetadataRow;
+        use crate::bindings_types::{Column, Value, TableSchema};
+
+        // Get the /metadata directory
+        let metadata_dir = match filesystem.get_dir("/metadata") {
+            Ok(dir) => dir,
+            Err(_) => return Ok(()), // No metadata dir, nothing to process
+        };
+
+        // List all files in /metadata
+        let entries = metadata_dir.list();
+
+        for (name, is_dir) in entries {
+            if is_dir || !name.ends_with(".json") {
+                continue;
+            }
+
+            // Read the file
+            let path = format!("/metadata/{}", name);
+            let contents = match filesystem.read_file(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Failed to read metadata file {}: {}", path, e);
+                    continue;
+                }
+            };
+
+            // Parse as JSON
+            let json_str = match String::from_utf8(contents) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("Metadata file {} is not valid UTF-8: {}", path, e);
+                    continue;
+                }
+            };
+
+            #[derive(serde::Deserialize)]
+            struct MetadataFile {
+                #[serde(default)]
+                tables: Vec<TableDef>,
+                #[serde(default)]
+                rows: Vec<RowDef>,
+            }
+
+            #[derive(serde::Deserialize)]
+            struct TableDef {
+                name: String,
+                columns: Vec<Column>,
+            }
+
+            #[derive(serde::Deserialize)]
+            struct RowDef {
+                table_name: String,
+                values: Vec<Value>,
+            }
+
+            let metadata: MetadataFile = match serde_json::from_str(&json_str) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!("Failed to parse metadata file {}: {}", path, e);
+                    continue;
+                }
+            };
+
+            let ctx = &mut store.data_mut().processing_ctx;
+
+            // Process table definitions
+            for table in metadata.tables {
+                ctx.table_schemas.push(TableSchema {
+                    name: table.name,
+                    columns: table.columns,
+                });
+            }
+
+            // Process row insertions
+            for row in metadata.rows {
+                ctx.metadata.push(MetadataRow {
+                    table_name: row.table_name,
+                    values: row.values,
+                });
+            }
+
+            tracing::debug!("Processed metadata file: {}", path);
+        }
+
+        Ok(())
     }
 
     pub fn name(&self) -> &str {

@@ -317,6 +317,27 @@ fn build_go_module(module_name: &str) -> PathBuf {
     wasm_path
 }
 
+// Helper function to build C# WASM module (uses dotnet + Wasi.Sdk)
+fn build_csharp_module(module_name: &str) -> PathBuf {
+    let mut csharp_example = workspace_root();
+    csharp_example.push(format!("examples/{}", module_name));
+
+    // Build module using make
+    let build_status = Command::new("make")
+        .current_dir(&csharp_example)
+        .status()
+        .expect(&format!("Failed to run make for {}", module_name));
+
+    assert!(build_status.success(), "{} module build failed", module_name);
+
+    // Return path to WASM file
+    let mut wasm_path = csharp_example;
+    wasm_path.push(format!("target/{}.wasm", module_name.replace("-", "_")));
+
+    assert!(wasm_path.exists(), "C# WASM module not found at {:?}", wasm_path);
+    wasm_path
+}
+
 #[test]
 fn test_python_sqlite_parser() {
     // Build the CLI
@@ -626,4 +647,82 @@ fn test_python_c_extensions() {
     for (module_name, _, _) in &results {
         println!("  - {}", module_name);
     }
+}
+
+#[test]
+fn test_csharp_json_analyzer() {
+    // Build the CLI
+    let status = Command::new("cargo")
+        .args(&["build", "--release"])
+        .current_dir(workspace_root())
+        .status()
+        .expect("Failed to build wadup CLI");
+    assert!(status.success(), "CLI build failed");
+
+    // Build C# module
+    let csharp_wasm = build_csharp_module("csharp-json-analyzer");
+
+    // Setup modules directory
+    let modules_dir = tempfile::tempdir().unwrap();
+    let dest = modules_dir.path().join("csharp_json_analyzer.wasm");
+    fs::copy(&csharp_wasm, &dest).unwrap();
+
+    // Setup input directory with a JSON file
+    let input_dir = tempfile::tempdir().unwrap();
+    let json_content = r#"{"name": "test", "values": [1, 2, 3], "nested": {"a": "b"}}"#;
+    fs::write(input_dir.path().join("test.json"), json_content).unwrap();
+
+    // Setup output database
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_db = output_dir.path().join("output.db");
+
+    // Run wadup
+    let status = Command::new(wadup_binary())
+        .args(&[
+            "--modules", modules_dir.path().to_str().unwrap(),
+            "--input", input_dir.path().to_str().unwrap(),
+            "--output", output_db.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to run wadup");
+
+    assert!(status.success(), "wadup execution failed");
+
+    // Verify results
+    let conn = rusqlite::Connection::open(&output_db).unwrap();
+
+    // Check that json_metadata table exists
+    let table_exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='json_metadata'",
+        [],
+        |row| row.get::<_, i64>(0)
+    ).unwrap() > 0;
+
+    assert!(table_exists, "json_metadata table not created");
+
+    // Get the metadata row
+    let (max_depth, total_keys, total_arrays, total_objects, parser_used): (i64, i64, i64, i64, String) = conn.query_row(
+        "SELECT max_depth, total_keys, total_arrays, total_objects, parser_used FROM json_metadata",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+    ).unwrap();
+
+    // Verify the analysis results
+    // JSON: {"name": "test", "values": [1, 2, 3], "nested": {"a": "b"}}
+    // - max_depth: 4 (root -> nested -> a, and root -> values -> array elements)
+    // - total_keys: 4 (name, values, nested, a)
+    // - total_arrays: 1 (values)
+    // - total_objects: 2 (root, nested)
+    assert!(max_depth >= 3, "Expected max_depth >= 3, got {}", max_depth);
+    assert!(total_keys >= 3, "Expected total_keys >= 3, got {}", total_keys);
+    assert_eq!(total_arrays, 1, "Expected 1 array, got {}", total_arrays);
+    assert!(total_objects >= 1, "Expected at least 1 object, got {}", total_objects);
+    assert_eq!(parser_used, "System.Text.Json", "Expected System.Text.Json parser");
+
+    println!("✓ C# JSON analyzer verified:");
+    println!("  - max_depth: {}", max_depth);
+    println!("  - total_keys: {}", total_keys);
+    println!("  - total_arrays: {}", total_arrays);
+    println!("  - total_objects: {}", total_objects);
+    println!("  - parser_used: {}", parser_used);
 }

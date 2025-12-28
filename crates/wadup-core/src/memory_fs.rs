@@ -330,6 +330,32 @@ impl MemoryFilesystem {
         entries.insert("data.bin".to_string(), Entry::File(MemoryFile::with_readonly_data(data)));
         Ok(())
     }
+
+    /// Get directory at path
+    pub fn get_dir(&self, path: &str) -> io::Result<MemoryDirectory> {
+        let path = path.trim_start_matches('/');
+
+        if path.is_empty() {
+            return Ok(self.root.clone());
+        }
+
+        let parts: Vec<&str> = path.split('/').collect();
+        let mut current_dir = self.root.clone();
+
+        for &part in &parts {
+            current_dir = current_dir.get_dir(part)?;
+        }
+
+        Ok(current_dir)
+    }
+
+    /// Read entire file contents as Vec<u8>
+    pub fn read_file(&self, path: &str) -> io::Result<Vec<u8>> {
+        let mut file = self.open_file(path)?;
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)?;
+        Ok(contents)
+    }
 }
 
 #[cfg(test)]
