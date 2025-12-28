@@ -507,11 +507,9 @@ fn test_python_c_extensions() {
         .unwrap();
 
     // Expected C extension modules that are available in Python WASI build
-    // Note: bz2, hashlib, lzma, struct, and zlib may not be available
-    // depending on the WASI build configuration
     let expected_modules = vec![
-        "array", "binascii", "cmath", "io", "itertools",
-        "math", "time", "unicodedata"
+        "array", "binascii", "bz2", "cmath", "hashlib", "io", "itertools",
+        "lzma", "math", "struct", "time", "unicodedata", "zlib"
     ];
 
     // Verify we have results for all expected modules

@@ -94,6 +94,152 @@ if [ ! -f "sqlite-wasi/libsqlite3.a" ]; then
     cd /tmp
 fi
 
+# Build zlib for WASI
+echo "Building zlib for WASI..."
+cd /tmp
+
+ZLIB_VERSION="1.3.1"
+ZLIB_TARBALL="zlib-${ZLIB_VERSION}.tar.gz"
+
+if [ ! -f "wasi-zlib/lib/libz.a" ]; then
+    if [ ! -f "$ZLIB_TARBALL" ]; then
+        echo "Downloading zlib ${ZLIB_VERSION}..."
+        if command -v wget &> /dev/null; then
+            wget "https://zlib.net/${ZLIB_TARBALL}"
+        elif command -v curl &> /dev/null; then
+            curl -L -O "https://zlib.net/${ZLIB_TARBALL}"
+        else
+            echo "ERROR: Neither wget nor curl found."
+            exit 1
+        fi
+    fi
+
+    tar xzf "$ZLIB_TARBALL"
+    cd "zlib-${ZLIB_VERSION}"
+
+    # Build zlib for WASI manually (bypass configure to avoid macOS libtool issues)
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c adler32.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c crc32.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c deflate.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c infback.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c inffast.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c inflate.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c inftrees.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c trees.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c zutil.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c compress.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c uncompr.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c gzclose.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c gzlib.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c gzread.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c gzwrite.c
+
+    # Create static library
+    ${WASI_SDK_PATH}/bin/ar rcs libz.a adler32.o crc32.o deflate.o infback.o \
+        inffast.o inflate.o inftrees.o trees.o zutil.o compress.o uncompr.o \
+        gzclose.o gzlib.o gzread.o gzwrite.o
+
+    # Install to /tmp/wasi-zlib
+    mkdir -p /tmp/wasi-zlib/include /tmp/wasi-zlib/lib
+    cp libz.a /tmp/wasi-zlib/lib/
+    cp zlib.h zconf.h /tmp/wasi-zlib/include/
+
+    echo "✓ zlib built for WASI"
+    cd /tmp
+fi
+
+# Build bzip2 for WASI
+echo "Building bzip2 for WASI..."
+cd /tmp
+
+BZIP2_VERSION="1.0.8"
+BZIP2_TARBALL="bzip2-${BZIP2_VERSION}.tar.gz"
+
+if [ ! -f "wasi-bzip2/lib/libbz2.a" ]; then
+    if [ ! -f "$BZIP2_TARBALL" ]; then
+        echo "Downloading bzip2 ${BZIP2_VERSION}..."
+        if command -v wget &> /dev/null; then
+            wget "https://sourceware.org/pub/bzip2/${BZIP2_TARBALL}"
+        elif command -v curl &> /dev/null; then
+            curl -L -O "https://sourceware.org/pub/bzip2/${BZIP2_TARBALL}"
+        else
+            echo "ERROR: Neither wget nor curl found."
+            exit 1
+        fi
+    fi
+
+    tar xzf "$BZIP2_TARBALL"
+    cd "bzip2-${BZIP2_VERSION}"
+
+    # Build bzip2 library only for WASI (skip executables that need signals)
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c blocksort.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c huffman.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c crctable.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c randtable.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c compress.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c decompress.c
+    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c bzlib.c
+
+    # Create static library
+    ${WASI_SDK_PATH}/bin/ar rcs libbz2.a blocksort.o huffman.o crctable.o \
+        randtable.o compress.o decompress.o bzlib.o
+
+    # Install manually
+    mkdir -p /tmp/wasi-bzip2/{include,lib}
+    cp bzlib.h /tmp/wasi-bzip2/include/
+    cp libbz2.a /tmp/wasi-bzip2/lib/
+
+    echo "✓ bzip2 built for WASI"
+    cd /tmp
+fi
+
+# Build liblzma (xz-utils) for WASI
+echo "Building liblzma for WASI..."
+cd /tmp
+
+XZ_VERSION="5.4.5"
+XZ_TARBALL="xz-${XZ_VERSION}.tar.gz"
+
+if [ ! -f "wasi-xz/lib/liblzma.a" ]; then
+    if [ ! -f "$XZ_TARBALL" ]; then
+        echo "Downloading xz-utils ${XZ_VERSION}..."
+        if command -v wget &> /dev/null; then
+            wget "https://tukaani.org/xz/${XZ_TARBALL}"
+        elif command -v curl &> /dev/null; then
+            curl -L -O "https://tukaani.org/xz/${XZ_TARBALL}"
+        else
+            echo "ERROR: Neither wget nor curl found."
+            exit 1
+        fi
+    fi
+
+    tar xzf "$XZ_TARBALL"
+    cd "xz-${XZ_VERSION}"
+
+    # Configure and build liblzma for WASI
+    CC=${WASI_SDK_PATH}/bin/clang \
+    AR=${WASI_SDK_PATH}/bin/ar \
+    RANLIB=${WASI_SDK_PATH}/bin/ranlib \
+    ./configure \
+        --host=wasm32-wasi \
+        --prefix=/tmp/wasi-xz \
+        --disable-shared \
+        --enable-static \
+        --disable-threads \
+        --disable-xz \
+        --disable-xzdec \
+        --disable-lzmadec \
+        --disable-lzmainfo \
+        --disable-scripts \
+        --disable-doc
+
+    make -j $(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+    make install
+
+    echo "✓ liblzma built for WASI"
+    cd /tmp
+fi
+
 # Download and build CPython
 echo "Building CPython ${PYTHON_VERSION} for WASI..."
 
@@ -134,8 +280,10 @@ content = content.replace("#'<encodings.*>',", "        '<encodings.*>',")
 #       math, struct, time, unicodedata, zlib) are compiled as built-ins, not frozen
 if "'stdlib - comprehensive'" not in content:
     stdlib_section = """    ('stdlib - comprehensive', [
+        '_compression',
         'base64',
         'bisect',
+        'bz2',
         'calendar',
         '<collections.*>',
         'contextlib',
@@ -150,6 +298,7 @@ if "'stdlib - comprehensive'" not in content:
         'enum',
         'functools',
         'gzip',
+        'hashlib',
         'heapq',
         'hmac',
         '<html.*>',
@@ -158,6 +307,7 @@ if "'stdlib - comprehensive'" not in content:
         'keyword',
         'linecache',
         'locale',
+        'lzma',
         'mimetypes',
         'numbers',
         'operator',
@@ -175,6 +325,7 @@ if "'stdlib - comprehensive'" not in content:
         'statistics',
         'string',
         'stringprep',
+        'struct',
         'tarfile',
         'textwrap',
         '<tomllib.*>',
@@ -209,13 +360,21 @@ PYEOF
 echo "Regenerating frozen modules..."
 python3 Tools/build/freeze_modules.py
 
-# Create Setup.local to force sqlite3 to be built as a builtin module
-# This embeds sqlite3 directly into libpython
+# Create Setup.local to force modules to be built as builtin modules
+# This embeds them directly into libpython
 cat > Modules/Setup.local << 'EOF'
-# Force sqlite3 to be built in (statically linked)
+# Force modules to be built in (statically linked)
 *static*
 
 _sqlite3 _sqlite/blob.c _sqlite/connection.c _sqlite/cursor.c _sqlite/microprotocols.c _sqlite/module.c _sqlite/prepare_protocol.c _sqlite/row.c _sqlite/statement.c _sqlite/util.c -I$(srcdir)/Modules/_sqlite -DMODULE_NAME='"sqlite3"' -DSQLITE_OMIT_LOAD_EXTENSION=1
+
+# Compression modules
+zlib zlibmodule.c -I/tmp/wasi-zlib/include -L/tmp/wasi-zlib/lib -lz
+_bz2 _bz2module.c -I/tmp/wasi-bzip2/include -L/tmp/wasi-bzip2/lib -lbz2
+_lzma _lzmamodule.c -I/tmp/wasi-xz/include -L/tmp/wasi-xz/lib -llzma
+
+# Hash module (uses existing HACL* in Python build)
+_hashlib _hashopenssl.c
 EOF
 
 echo "Building native Python for cross-compilation..."
@@ -231,9 +390,9 @@ echo "Building WASI Python..."
 export CONFIG_SITE="$(pwd)/Tools/wasm/config.site-wasm32-wasi"
 export WASI_SDK_PATH="${WASI_SDK_PATH}"
 
-# Point Python configure to SQLite WASI build
-export CPPFLAGS="-I/tmp/sqlite-wasi/include"
-export LDFLAGS="-L/tmp/sqlite-wasi/lib"
+# Point Python configure to all WASI library builds
+export CPPFLAGS="-I/tmp/sqlite-wasi/include -I/tmp/wasi-zlib/include -I/tmp/wasi-bzip2/include -I/tmp/wasi-xz/include"
+export LDFLAGS="-L/tmp/sqlite-wasi/lib -L/tmp/wasi-zlib/lib -L/tmp/wasi-bzip2/lib -L/tmp/wasi-xz/lib"
 
 mkdir -p builddir/wasi
 cd builddir/wasi

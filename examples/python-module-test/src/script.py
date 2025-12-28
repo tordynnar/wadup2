@@ -1,18 +1,21 @@
 import wadup
 
 # List of C extension modules to test
-# Note: Only testing modules that are confirmed to be built as C extensions
-# in the Python WASI build. Some modules (bz2, hashlib, lzma, struct, zlib)
-# may not be available depending on the build configuration.
+# These modules are built as C extensions in the Python WASI build
 c_extension_modules = [
     'array',
     'binascii',
+    'bz2',
     'cmath',
+    'hashlib',
     'io',
     'itertools',
+    'lzma',
     'math',
+    'struct',
     'time',
     'unicodedata',
+    'zlib',
 ]
 
 def main():

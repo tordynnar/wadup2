@@ -79,6 +79,9 @@ $(TARGET): $(OBJS) $(PYTHON_LIB)
 		$(PYTHON_DIR)/lib/libexpat.a \
 		$(PYTHON_DIR)/lib/libsqlite3.a \
 		$(wildcard $(PYTHON_DIR)/lib/libHacl_*.a) \
+		/tmp/wasi-zlib/lib/libz.a \
+		/tmp/wasi-bzip2/lib/libbz2.a \
+		/tmp/wasi-xz/lib/liblzma.a \
 		-lm \
 		$(LDFLAGS)
 	@echo "✓ Build successful: $(TARGET)"
