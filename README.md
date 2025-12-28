@@ -40,7 +40,7 @@ wadup \
 
 ## Writing WASM Modules
 
-WADUP modules are written in Rust and compiled to `wasm32-wasip1` (WASI target).
+WADUP modules can be written in **Rust**, **Python**, or **Go**, all compiled to the `wasm32-wasip1` (WASI) target.
 
 ### Virtual Filesystem
 
@@ -50,7 +50,28 @@ Each WASM module runs in a sandboxed virtual filesystem where:
 
 Modules can access content using standard file I/O operations. The `/data.bin` file is a zero-copy reference to the content data, implemented using `bytes::Bytes` for optimal memory efficiency.
 
-### Example: File Size Counter
+### Language Support
+
+WADUP supports three languages for writing modules:
+
+| Language | Entry Point | Module Pattern | WASM Size | Build Time | Best For |
+|----------|-------------|----------------|-----------|------------|----------|
+| **Rust** | `process()` | Reused | ~2.5 MB | ~30s | Performance, small size |
+| **Python** | `process()` | Reused | ~20 MB | ~5m (first) | Rapid prototyping, Python libs |
+| **Go** | `_start` | Reload-per-call | ~8.3 MB | ~10s | Go ecosystem, fast builds |
+
+**Rust** modules export a `process()` function and are reused across files (one instance processes all files per thread).
+
+**Python** modules use embedded CPython 3.13.7 and are also reused (interpreter initialized once per thread).
+
+**Go** modules use the `_start` entry point with reload-per-call (fresh instance per file, main() runs and exits).
+
+See language-specific guides:
+- [Rust Examples](examples/sqlite-parser/README.md)
+- [Python Guide](examples/python-sqlite-parser/README.md)
+- [Go Guide](examples/go-sqlite-parser/README.md)
+
+### Example: File Size Counter (Rust)
 
 ```rust
 use wadup_guest::*;
@@ -151,9 +172,11 @@ WADUP is designed for efficient processing of many files:
 
 1. **Module Loading** (startup): All `.wasm` files are loaded from the modules directory and compiled once
 2. **Instance Creation** (per thread): Each worker thread creates one instance of each module
-3. **File Processing** (runtime): The same module instances are reused to process all files assigned to that thread
+3. **File Processing** (runtime): Module instances handle files based on their pattern:
+   - **Rust/Python** (reuse): Same instance processes all files assigned to that thread
+   - **Go** (reload-per-call): Fresh instance created for each file
 
-**Key Benefits**:
+**Module Reuse Benefits** (Rust/Python):
 - Module compilation happens once at startup, not per file
 - WASM linear memory persists across files, allowing modules to maintain state if desired
 - For Python modules using CPython, the interpreter is initialized once per thread and reused for all files
@@ -163,13 +186,32 @@ WADUP is designed for efficient processing of many files:
 - Without reuse: 1000 × 20ms = 20 seconds wasted on Python initialization
 - With reuse: 1 × 20ms = 20ms total initialization (999× speedup)
 
+**Reload-Per-Call Pattern** (Go):
+- Go modules use `_start` entry point and reload for each file
+- Ensures clean state between files (no shared memory)
+- Go runtime initialization is fast (~1ms), so reload overhead is minimal
+- Simplifies module development (no state management needed)
+
 This architecture makes WADUP suitable for batch processing large numbers of files efficiently.
 
-### wadup-guest
-Rust library for WASM module authors:
+### Guest Libraries
+
+Language-specific libraries for WASM module authors:
+
+**wadup-guest** (Rust):
 - **Content API**: Read content data and metadata
 - **Table API**: Define schemas and insert rows
 - **SubContent API**: Emit sub-content for recursive processing
+
+**python-wadup-guest** (Python):
+- Embedded Python extension module providing `wadup.define_table()` and `wadup.insert_row()`
+- C-based FFI bridge to host functions
+- Used by all Python WASM modules
+
+**go-wadup-guest** (Go):
+- Pure Go library with `//go:wasmimport` FFI bindings
+- Table builder API: `wadup.NewTableBuilder()`
+- Value types: `wadup.Int64`, `wadup.String`, `wadup.Float64`
 
 ### wadup-cli
 Command-line interface for running WADUP processing jobs.
@@ -260,10 +302,18 @@ Module-defined tables use `content_uuid` as a foreign key to `__wadup_content.uu
 
 See the `examples/` directory for working WASM modules:
 
-- **byte-counter**: Counts and records file sizes (Rust)
-- **zip-extractor**: Extracts files from ZIP archives (Rust)
-- **sqlite-parser**: Parses SQLite databases using SQL queries (Rust)
-- **python-sqlite-parser**: Parses SQLite databases using CPython 3.13.7 (Python)
+**Rust Modules:**
+- **byte-counter**: Counts and records file sizes
+- **zip-extractor**: Extracts files from ZIP archives
+- **sqlite-parser**: Parses SQLite databases using SQL queries
+
+**Python Modules:**
+- **python-sqlite-parser**: Parses SQLite databases using CPython 3.13.7
+- **python-counter**: Demonstrates module reuse with global state
+- **python-module-test**: Tests C extension imports
+
+**Go Modules:**
+- **go-sqlite-parser**: Parses SQLite databases using pure Go SQLite library
 
 All examples use the WASI target (`wasm32-wasip1`) to access the virtual filesystem.
 
@@ -316,13 +366,37 @@ All Python modules link against this shared build, avoiding duplication.
 
 See [examples/python-sqlite-parser/README.md](examples/python-sqlite-parser/README.md) for complete documentation, architecture details, and troubleshooting.
 
+**Go Modules** (Standard Go 1.21+):
+
+```bash
+cd examples/go-sqlite-parser
+make
+```
+
+Go modules use standard Go (not TinyGo) with `GOOS=wasip1 GOARCH=wasm` target. No special setup required - standard Go has built-in WASI support!
+
+**Key Features**:
+- Pure Go libraries work (e.g., `github.com/ncruces/go-sqlite3`)
+- `_start` entry point with reload-per-call pattern (fresh instance per file)
+- Fast build times (~10 seconds)
+- Moderate WASM size (~8.3 MB)
+
+**Important**: Go modules use reload-per-call pattern where each file gets a fresh instance. The `main()` function runs, returns to Go runtime, which calls `runtime.exit` causing a WASM trap. WADUP detects this expected trap and extracts the processing context.
+
+See [examples/go-sqlite-parser/README.md](examples/go-sqlite-parser/README.md) for complete guide, best practices, and what works/doesn't work with Go+WASM.
+
 ## Development
 
 ### Prerequisites
 
+**Core Framework:**
 - Rust 1.70+
 - wasm32-wasip1 target: `rustup target add wasm32-wasip1`
-- WASI SDK (for modules with C dependencies): See [sqlite-parser README](examples/sqlite-parser/README.md)
+
+**Module Development (choose based on your language):**
+- **Rust modules**: wasm32-wasip1 target (already installed above)
+- **Python modules**: WASI SDK (auto-downloaded by build script)
+- **Go modules**: Go 1.21+ (WASI support built-in, no extra tools needed)
 
 ### Building
 
@@ -340,6 +414,10 @@ cargo build --target wasm32-wasip1 --release
 # For sqlite-parser, use the build script
 cd ../sqlite-parser
 ./build.sh
+
+# For Go modules
+cd ../go-sqlite-parser
+make
 ```
 
 ### Testing
