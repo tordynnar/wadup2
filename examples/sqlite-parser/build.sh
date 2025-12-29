@@ -55,60 +55,28 @@ detect_platform() {
     echo "${arch}-${os}"
 }
 
-# Download and extract WASI SDK
-download_wasi_sdk() {
+# Get the project root directory (two levels up from this script)
+get_project_root() {
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    echo "$(cd "$script_dir/../.." && pwd)"
+}
+
+# Find WASI SDK in project deps directory
+find_wasi_sdk() {
     local platform=$1
-    local wasi_version="24.0"
-    local wasi_dir="/tmp/wasi-sdk-${wasi_version}-${platform}"
+    local project_root=$(get_project_root)
 
-    # Check if already downloaded
-    if [ -d "$wasi_dir" ]; then
-        print_success "WASI SDK already present at $wasi_dir" >&2
-        echo "$wasi_dir"
+    # Check for any WASI SDK in project deps
+    local wasi_sdk=$(find "${project_root}/deps" -maxdepth 1 -name "wasi-sdk-*" -type d 2>/dev/null | head -n 1)
+    if [ -n "$wasi_sdk" ]; then
+        print_success "WASI SDK found at $wasi_sdk" >&2
+        echo "$wasi_sdk"
         return 0
     fi
 
-    # Check for any WASI SDK in /tmp
-    local existing_wasi=$(find /tmp -maxdepth 1 -name "wasi-sdk-*" -type d 2>/dev/null | head -n 1)
-    if [ -n "$existing_wasi" ]; then
-        print_success "Found existing WASI SDK at $existing_wasi" >&2
-        echo "$existing_wasi"
-        return 0
-    fi
-
-    print_info "Downloading WASI SDK ${wasi_version} for ${platform}..." >&2
-
-    local filename="wasi-sdk-${wasi_version}-${platform}.tar.gz"
-    local url="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-24/${filename}"
-    local temp_file="/tmp/${filename}"
-
-    # Download with progress
-    if command -v curl &> /dev/null; then
-        curl -L -o "$temp_file" "$url" --progress-bar || {
-            print_error "Failed to download WASI SDK" >&2
-            exit 1
-        }
-    elif command -v wget &> /dev/null; then
-        wget -O "$temp_file" "$url" || {
-            print_error "Failed to download WASI SDK" >&2
-            exit 1
-        }
-    else
-        print_error "Neither curl nor wget found. Please install one of them." >&2
-        exit 1
-    fi
-
-    print_info "Extracting WASI SDK..." >&2
-    tar -xzf "$temp_file" -C /tmp || {
-        print_error "Failed to extract WASI SDK" >&2
-        rm -f "$temp_file"
-        exit 1
-    }
-
-    rm -f "$temp_file"
-    print_success "WASI SDK downloaded and extracted to $wasi_dir" >&2
-
-    echo "$wasi_dir"
+    print_error "WASI SDK not found in ${project_root}/deps/" >&2
+    print_info "Please run: scripts/download-deps.sh" >&2
+    exit 1
 }
 
 # Check and add Rust target
@@ -165,8 +133,8 @@ main() {
     print_success "Platform: $PLATFORM"
     echo ""
 
-    # Download WASI SDK if needed
-    WASI_SDK_PATH=$(download_wasi_sdk "$PLATFORM")
+    # Find WASI SDK in deps directory
+    WASI_SDK_PATH=$(find_wasi_sdk "$PLATFORM")
     echo ""
 
     # Ensure Rust target
