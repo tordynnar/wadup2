@@ -13,35 +13,14 @@ Example:
 
     wadup.insert_row("my_table", ["example", 42])
     wadup.flush()
-
-Note: This module avoids using the `json` module because it requires
-`copyreg` which isn't frozen in the Python WASI build.
 """
+import json
 import os
 
 # Metadata accumulation
 _tables = []
 _rows = []
 _flush_counter = 0
-
-
-def _escape_string(s):
-    """Escape a string for JSON output."""
-    result = []
-    for c in s:
-        if c == '"':
-            result.append('\\"')
-        elif c == '\\':
-            result.append('\\\\')
-        elif c == '\n':
-            result.append('\\n')
-        elif c == '\r':
-            result.append('\\r')
-        elif c == '\t':
-            result.append('\\t')
-        else:
-            result.append(c)
-    return ''.join(result)
 
 
 def define_table(name, columns):
@@ -58,14 +37,9 @@ def define_table(name, columns):
             ("size", "Int64"),
         ])
     """
-    # Build columns JSON
-    cols_json = []
-    for col_name, col_type in columns:
-        cols_json.append(f'{{"name":"{_escape_string(col_name)}","data_type":"{_escape_string(col_type)}"}}')
-
     _tables.append({
         "name": name,
-        "columns_json": "[" + ",".join(cols_json) + "]"
+        "columns": [{"name": n, "data_type": t} for n, t in columns]
     })
 
 
@@ -79,23 +53,18 @@ def insert_row(table_name, values):
     Example:
         wadup.insert_row("files", ["readme.txt", 1024])
     """
-    # Build values JSON
-    vals_json = []
+    typed = []
     for v in values:
         if isinstance(v, bool):
             # bool must be checked before int since bool is a subclass of int
-            vals_json.append(f'{{"Int64":{1 if v else 0}}}')
+            typed.append({"Int64": 1 if v else 0})
         elif isinstance(v, int):
-            vals_json.append(f'{{"Int64":{v}}}')
+            typed.append({"Int64": v})
         elif isinstance(v, float):
-            vals_json.append(f'{{"Float64":{v}}}')
+            typed.append({"Float64": v})
         else:
-            vals_json.append(f'{{"String":"{_escape_string(str(v))}"}}')
-
-    _rows.append({
-        "table_name": table_name,
-        "values_json": "[" + ",".join(vals_json) + "]"
-    })
+            typed.append({"String": str(v)})
+    _rows.append({"table_name": table_name, "values": typed})
 
 
 def flush():
@@ -113,19 +82,13 @@ def flush():
 
     os.makedirs("/metadata", exist_ok=True)
 
-    # Build JSON manually (avoiding json module which requires copyreg)
-    tables_json = []
-    for t in _tables:
-        tables_json.append(f'{{"name":"{_escape_string(t["name"])}","columns":{t["columns_json"]}}}')
-
-    rows_json = []
-    for r in _rows:
-        rows_json.append(f'{{"table_name":"{_escape_string(r["table_name"])}","values":{r["values_json"]}}}')
-
-    json_output = '{"tables":[' + ",".join(tables_json) + '],"rows":[' + ",".join(rows_json) + ']}'
+    metadata = {
+        "tables": _tables,
+        "rows": _rows
+    }
 
     with open(f"/metadata/output_{_flush_counter}.json", "w") as f:
-        f.write(json_output)
+        json.dump(metadata, f)
 
     _flush_counter += 1
     _tables = []
@@ -163,7 +126,5 @@ def emit_bytes(data, filename):
         f.write(data)
 
     # Write metadata file (triggers processing on close)
-    # Build JSON manually
-    metadata_json = f'{{"filename":"{_escape_string(filename)}"}}'
     with open(f"/subcontent/metadata_{n}.json", "w") as f:
-        f.write(metadata_json)
+        json.dump({"filename": filename}, f)

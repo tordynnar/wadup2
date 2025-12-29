@@ -94,6 +94,7 @@ if "'stdlib - comprehensive'" not in content:
         'contextlib',
         'contextvars',
         'copy',
+        'copyreg',
         'csv',
         'dataclasses',
         'datetime',
