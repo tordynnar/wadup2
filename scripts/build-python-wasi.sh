@@ -191,7 +191,8 @@ BUILD_PYTHON_PATH=$(pwd)/python.exe
 cd ../..
 
 echo "Building WASI Python..."
-export CONFIG_SITE="$(pwd)/Tools/wasm/config.site-wasm32-wasi"
+# Use our custom config.site which extends the official one with dlopen disabled
+export CONFIG_SITE="$SCRIPT_DIR/config.site-wasm32-wasi"
 export WASI_SDK_PATH="${WASI_SDK_PATH}"
 
 # Point Python configure to all WASI library builds

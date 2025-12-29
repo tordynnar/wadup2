@@ -225,9 +225,6 @@ impl ModuleInstance {
         // Add host functions
         Self::add_host_functions(&mut linker)?;
 
-        // Add POSIX stub functions (for Python and other language runtimes)
-        Self::add_posix_stub_functions(&mut linker)?;
-
         let instance = linker.instantiate(&mut store, module)?;
 
         // Call _start once during initialization if it exists (for Go runtime initialization)
@@ -1023,61 +1020,6 @@ impl ModuleInstance {
         Ok(())
     }
 
-    /// Add dynamic loading stub functions for language runtimes like Python.
-    ///
-    /// WASI doesn't support dynamic loading, so we provide stubs that return
-    /// failure/NULL for dlopen, dlsym, dlclose, and dlerror.
-    ///
-    /// Note: Signal handling (signal, raise, __SIG_*), process info (getpid),
-    /// and timing functions (clock, times) are now provided by WASI SDK 29.0's
-    /// emulated libraries (libwasi-emulated-signal.a, libwasi-emulated-getpid.a,
-    /// libwasi-emulated-process-clocks.a) which are linked into the WASM modules.
-    fn add_posix_stub_functions(linker: &mut Linker<StoreData>) -> Result<()> {
-        // Dynamic linking stubs - WASI doesn't support dynamic loading
-
-        // dlopen(const char *filename, int flags) -> void* (pointer)
-        // Returns NULL to indicate failure
-        linker.func_wrap(
-            "env",
-            "dlopen",
-            |_caller: Caller<StoreData>, _filename: i32, _flags: i32| -> i32 {
-                0 // NULL - dynamic loading not supported
-            },
-        )?;
-
-        // dlsym(void *handle, const char *symbol) -> void* (pointer)
-        // Returns NULL to indicate symbol not found
-        linker.func_wrap(
-            "env",
-            "dlsym",
-            |_caller: Caller<StoreData>, _handle: i32, _symbol: i32| -> i32 {
-                0 // NULL
-            },
-        )?;
-
-        // dlclose(void *handle) -> int
-        // Returns 0 for success (no-op)
-        linker.func_wrap(
-            "env",
-            "dlclose",
-            |_caller: Caller<StoreData>, _handle: i32| -> i32 {
-                0 // success
-            },
-        )?;
-
-        // dlerror() -> char* (pointer)
-        // Returns NULL since we can't provide an error message string
-        linker.func_wrap(
-            "env",
-            "dlerror",
-            |_caller: Caller<StoreData>| -> i32 {
-                0 // NULL - no error message
-            },
-        )?;
-
-        Ok(())
-    }
-
     pub fn process_content(
         &mut self,
         content_uuid: uuid::Uuid,
@@ -1197,7 +1139,6 @@ impl ModuleInstance {
         let mut linker = Linker::new(&self.engine);
         Self::add_wasi_functions(&mut linker)?;
         Self::add_host_functions(&mut linker)?;
-        Self::add_posix_stub_functions(&mut linker)?;
 
         // Instantiate the module fresh
         let instance = linker.instantiate(&mut store, &self.module)?;
