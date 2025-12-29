@@ -5,7 +5,7 @@
 WADUP_ROOT := $(shell cd $(CURDIR)/../.. && pwd)
 
 # Paths
-BUILD_SCRIPT := $(WADUP_ROOT)/scripts/build-python-project.sh
+BUILD_SCRIPT := $(WADUP_ROOT)/scripts/build-python-project.py
 PROJECT_DIR := $(CURDIR)
 TARGET_DIR := $(CURDIR)/target
 

@@ -458,11 +458,11 @@ First, build the shared Python WASI runtime (one-time, ~5-10 minutes):
 ./scripts/build-python-wasi.sh
 ```
 
-Then build individual Python modules using `build-python-project.sh`:
+Then build individual Python modules using `build-python-project.py`:
 ```bash
-./scripts/build-python-project.sh examples/python-counter
-./scripts/build-python-project.sh examples/python-sqlite-parser
-./scripts/build-python-project.sh examples/python-multi-file
+./scripts/build-python-project.py examples/python-counter
+./scripts/build-python-project.py examples/python-sqlite-parser
+./scripts/build-python-project.py examples/python-multi-file
 ```
 
 Or use Make:
