@@ -18,6 +18,7 @@ pub struct ResourceLimits {
 pub struct StoreData {
     pub processing_ctx: ProcessingContext,
     pub wasi_ctx: WasiCtx,
+    resource_limiter: Option<ResourceLimiterImpl>,
 }
 
 pub struct WasmRuntime {
@@ -162,9 +163,8 @@ pub struct ModuleInstance {
     name: String,
     style: ModuleStyle,
     fuel_limit: Option<u64>,
+    max_memory: Option<usize>,
     metadata_store: MetadataStore,
-    limits: ResourceLimits,
-    _limiter: Option<Box<ResourceLimiterImpl>>,
 }
 
 impl ModuleInstance {
@@ -194,9 +194,15 @@ impl ModuleInstance {
         // Create WASI context with our in-memory filesystem
         let wasi_ctx = WasiCtx::new(filesystem);
 
+        // Create resource limiter if memory limit is specified
+        let resource_limiter = limits.max_memory.map(|max_memory| {
+            ResourceLimiterImpl { max_memory }
+        });
+
         let store_data = StoreData {
             processing_ctx: dummy_ctx,
             wasi_ctx,
+            resource_limiter,
         };
 
         let mut store = Store::new(engine, store_data);
@@ -206,10 +212,10 @@ impl ModuleInstance {
             store.set_fuel(fuel)?;
         }
 
-        // TODO: Set memory limits if specified
-        let _limiter_box = limits.max_memory.map(|max_memory| {
-            Box::new(ResourceLimiterImpl { max_memory })
-        });
+        // Set memory limits if specified
+        if store.data().resource_limiter.is_some() {
+            store.limiter(|data| data.resource_limiter.as_mut().unwrap());
+        }
 
         let mut linker = Linker::new(engine);
 
@@ -218,6 +224,9 @@ impl ModuleInstance {
 
         // Add host functions
         Self::add_host_functions(&mut linker)?;
+
+        // Add POSIX stub functions (for Python and other language runtimes)
+        Self::add_posix_stub_functions(&mut linker)?;
 
         let instance = linker.instantiate(&mut store, module)?;
 
@@ -235,9 +244,8 @@ impl ModuleInstance {
             name: name.to_string(),
             style,
             fuel_limit: limits.fuel,
+            max_memory: limits.max_memory,
             metadata_store,
-            limits: limits.clone(),
-            _limiter: _limiter_box,
         })
     }
 
@@ -1015,6 +1023,167 @@ impl ModuleInstance {
         Ok(())
     }
 
+    /// Add POSIX stub functions for language runtimes like Python.
+    ///
+    /// These stub functions provide minimal implementations of POSIX functions
+    /// that aren't available in WASI but are expected by some language runtimes.
+    /// They are imported from the "env" module.
+    ///
+    /// This allows building WASM modules without linking in C stubs, making
+    /// module creation simpler.
+    fn add_posix_stub_functions(linker: &mut Linker<StoreData>) -> Result<()> {
+        // Helper to get memory
+        fn get_memory<T>(caller: &mut Caller<T>) -> Result<Memory> {
+            caller.get_export("memory")
+                .and_then(|e| e.into_memory())
+                .ok_or_else(|| anyhow::anyhow!("No memory export found"))
+        }
+
+        // Signal handler stubs - these are function pointers in C
+        // In WASM they're represented as i32 (function table indices or constants)
+
+        // __SIG_DFL(int sig) - Default signal handler stub
+        linker.func_wrap(
+            "env",
+            "__SIG_DFL",
+            |_caller: Caller<StoreData>, _sig: i32| {
+                // No-op
+            },
+        )?;
+
+        // __SIG_IGN(int sig) - Ignore signal handler stub
+        linker.func_wrap(
+            "env",
+            "__SIG_IGN",
+            |_caller: Caller<StoreData>, _sig: i32| {
+                // No-op
+            },
+        )?;
+
+        // __SIG_ERR(int sig) - Error signal handler stub
+        linker.func_wrap(
+            "env",
+            "__SIG_ERR",
+            |_caller: Caller<StoreData>, _sig: i32| {
+                // No-op
+            },
+        )?;
+
+        // getpid() -> pid_t (i32)
+        // Returns a fixed PID of 1 since WASI doesn't have processes
+        linker.func_wrap(
+            "env",
+            "getpid",
+            |_caller: Caller<StoreData>| -> i32 {
+                1
+            },
+        )?;
+
+        // clock() -> clock_t (i64)
+        // Returns 0 (no CPU time tracking in WASI)
+        // Note: Python expects i64, not i32
+        linker.func_wrap(
+            "env",
+            "clock",
+            |_caller: Caller<StoreData>| -> i64 {
+                0
+            },
+        )?;
+
+        // times(struct tms *buf) -> clock_t (i64)
+        // Fills buffer with zeros and returns 0
+        // struct tms has 4 fields of clock_t (long/i64 on 64-bit, but in WASI32 it's i32)
+        linker.func_wrap(
+            "env",
+            "times",
+            |mut caller: Caller<StoreData>, buf_ptr: i32| -> i64 {
+                if buf_ptr != 0 {
+                    if let Ok(memory) = get_memory(&mut caller) {
+                        // struct tms: 4 x long (in WASI32, long is i32 = 4 bytes each = 16 bytes)
+                        let zeros = [0u8; 16];
+                        let _ = memory.write(&mut caller, buf_ptr as usize, &zeros);
+                    }
+                }
+                0
+            },
+        )?;
+
+        // signal(int signum, sighandler_t handler) -> sighandler_t (i32, as function pointer)
+        // Just returns the handler to indicate "success"
+        linker.func_wrap(
+            "env",
+            "signal",
+            |_caller: Caller<StoreData>, _signum: i32, handler: i32| -> i32 {
+                handler
+            },
+        )?;
+
+        // raise(int sig) -> int
+        // No-op, returns 0 for success
+        linker.func_wrap(
+            "env",
+            "raise",
+            |_caller: Caller<StoreData>, _sig: i32| -> i32 {
+                0
+            },
+        )?;
+
+        // strsignal(int sig) -> char* (pointer)
+        // Returns NULL since we can't easily provide a string in guest memory
+        // Python should handle NULL gracefully
+        linker.func_wrap(
+            "env",
+            "strsignal",
+            |_caller: Caller<StoreData>, _sig: i32| -> i32 {
+                0 // NULL
+            },
+        )?;
+
+        // Dynamic linking stubs - WASI doesn't support dynamic loading
+
+        // dlopen(const char *filename, int flags) -> void* (pointer)
+        // Returns NULL to indicate failure
+        linker.func_wrap(
+            "env",
+            "dlopen",
+            |_caller: Caller<StoreData>, _filename: i32, _flags: i32| -> i32 {
+                0 // NULL - dynamic loading not supported
+            },
+        )?;
+
+        // dlsym(void *handle, const char *symbol) -> void* (pointer)
+        // Returns NULL to indicate symbol not found
+        linker.func_wrap(
+            "env",
+            "dlsym",
+            |_caller: Caller<StoreData>, _handle: i32, _symbol: i32| -> i32 {
+                0 // NULL
+            },
+        )?;
+
+        // dlclose(void *handle) -> int
+        // Returns 0 for success (no-op)
+        linker.func_wrap(
+            "env",
+            "dlclose",
+            |_caller: Caller<StoreData>, _handle: i32| -> i32 {
+                0 // success
+            },
+        )?;
+
+        // dlerror() -> char* (pointer)
+        // Returns NULL since we can't provide an error message string
+        linker.func_wrap(
+            "env",
+            "dlerror",
+            |_caller: Caller<StoreData>| -> i32 {
+                0 // NULL - no error message
+            },
+        )?;
+
+        Ok(())
+    }
+
     pub fn process_content(
         &mut self,
         content_uuid: uuid::Uuid,
@@ -1107,9 +1276,15 @@ impl ModuleInstance {
 
         let wasi_ctx = WasiCtx::new(filesystem.clone());
 
+        // Create resource limiter if memory limit is specified
+        let resource_limiter = self.max_memory.map(|max_memory| {
+            ResourceLimiterImpl { max_memory }
+        });
+
         let store_data = StoreData {
             processing_ctx: ctx,
             wasi_ctx,
+            resource_limiter,
         };
 
         let mut store = Store::new(&self.engine, store_data);
@@ -1119,10 +1294,16 @@ impl ModuleInstance {
             store.set_fuel(fuel)?;
         }
 
+        // Set memory limits if specified
+        if store.data().resource_limiter.is_some() {
+            store.limiter(|data| data.resource_limiter.as_mut().unwrap());
+        }
+
         // Create a new linker
         let mut linker = Linker::new(&self.engine);
         Self::add_wasi_functions(&mut linker)?;
         Self::add_host_functions(&mut linker)?;
+        Self::add_posix_stub_functions(&mut linker)?;
 
         // Instantiate the module fresh
         let instance = linker.instantiate(&mut store, &self.module)?;

@@ -1,9 +1,20 @@
 #!/bin/bash
+# Build CPython for WASI
+# Dependencies are managed by download-deps.sh and stored in deps/
+
 set -e
 
 PYTHON_VERSION="3.13.7"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_DIR="${SCRIPT_DIR}/../build/python-wasi"
+WADUP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PYTHON_DIR="$WADUP_ROOT/build/python-wasi"
+DEPS_DIR="$WADUP_ROOT/deps"
+
+# Check if Python is already built
+if [ -f "${PYTHON_DIR}/lib/libpython3.13.a" ]; then
+    echo "CPython already built at ${PYTHON_DIR}"
+    exit 0
+fi
 
 # Detect platform for WASI SDK
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -14,246 +25,43 @@ if [ "$OS" = "darwin" ]; then
 elif [ "$OS" = "linux" ]; then
     WASI_SDK_OS="linux"
 else
-    echo "Unsupported OS: $OS"
+    echo "ERROR: Unsupported OS: $OS"
     exit 1
 fi
 
 WASI_SDK_VERSION="24.0"
 WASI_SDK_NAME="wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-${WASI_SDK_OS}"
-WASI_SDK_PATH="/tmp/${WASI_SDK_NAME}"
+WASI_SDK_PATH="$DEPS_DIR/$WASI_SDK_NAME"
 
-# Download WASI SDK if needed
+# Ensure dependencies are downloaded
+echo "Checking dependencies..."
+"$SCRIPT_DIR/download-deps.sh"
+
+# Verify dependencies exist
 if [ ! -d "$WASI_SDK_PATH" ]; then
-    echo "Downloading WASI SDK ${WASI_SDK_VERSION}..."
-    cd /tmp
-
-    # Check if wget or curl is available
-    if command -v wget &> /dev/null; then
-        wget "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/${WASI_SDK_NAME}.tar.gz"
-    elif command -v curl &> /dev/null; then
-        curl -L -O "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/${WASI_SDK_NAME}.tar.gz"
-    else
-        echo "ERROR: Neither wget nor curl found. Please install one of them."
-        exit 1
-    fi
-
-    tar xzf "${WASI_SDK_NAME}.tar.gz"
-    echo "✓ WASI SDK downloaded and extracted to ${WASI_SDK_PATH}"
-    cd "$SCRIPT_DIR"
+    echo "ERROR: WASI SDK not found at $WASI_SDK_PATH"
+    exit 1
 fi
 
-# Check if Python is already built
-if [ -f "${PYTHON_DIR}/lib/libpython3.13.a" ]; then
-    echo "✓ CPython already built at ${PYTHON_DIR}"
-    exit 0
-fi
-
-# Build SQLite for WASI first
-echo "Building SQLite for WASI..."
-cd /tmp
-
-SQLITE_VERSION="3450100"  # SQLite 3.45.1
-SQLITE_YEAR="2024"
-SQLITE_TARBALL="sqlite-amalgamation-${SQLITE_VERSION}.zip"
-
-if [ ! -f "sqlite-wasi/libsqlite3.a" ]; then
-    if [ ! -f "$SQLITE_TARBALL" ]; then
-        echo "Downloading SQLite ${SQLITE_VERSION}..."
-        if command -v wget &> /dev/null; then
-            wget "https://www.sqlite.org/${SQLITE_YEAR}/${SQLITE_TARBALL}"
-        elif command -v curl &> /dev/null; then
-            curl -L -O "https://www.sqlite.org/${SQLITE_YEAR}/${SQLITE_TARBALL}"
-        else
-            echo "ERROR: Neither wget nor curl found."
-            exit 1
-        fi
-    fi
-
-    unzip -o -q "$SQLITE_TARBALL"
-    cd "sqlite-amalgamation-${SQLITE_VERSION}"
-
-    # Compile SQLite for WASI
-    ${WASI_SDK_PATH}/bin/clang \
-        -c sqlite3.c \
-        -o sqlite3.o \
-        -O2 \
-        -DSQLITE_OMIT_LOAD_EXTENSION=1 \
-        -DSQLITE_THREADSAFE=0 \
-        -DSQLITE_ENABLE_FTS5=1 \
-        -DSQLITE_ENABLE_JSON1=1
-
-    # Create static library
-    ${WASI_SDK_PATH}/bin/ar rcs libsqlite3.a sqlite3.o
-
-    # Install to /tmp/sqlite-wasi
-    mkdir -p /tmp/sqlite-wasi/include /tmp/sqlite-wasi/lib
-    cp libsqlite3.a /tmp/sqlite-wasi/lib/
-    cp sqlite3.h sqlite3ext.h /tmp/sqlite-wasi/include/
-
-    echo "✓ SQLite built for WASI"
-    cd /tmp
-fi
-
-# Build zlib for WASI
-echo "Building zlib for WASI..."
-cd /tmp
-
-ZLIB_VERSION="1.3.1"
-ZLIB_TARBALL="zlib-${ZLIB_VERSION}.tar.gz"
-
-if [ ! -f "wasi-zlib/lib/libz.a" ]; then
-    if [ ! -f "$ZLIB_TARBALL" ]; then
-        echo "Downloading zlib ${ZLIB_VERSION}..."
-        if command -v wget &> /dev/null; then
-            wget "https://zlib.net/${ZLIB_TARBALL}"
-        elif command -v curl &> /dev/null; then
-            curl -L -O "https://zlib.net/${ZLIB_TARBALL}"
-        else
-            echo "ERROR: Neither wget nor curl found."
-            exit 1
-        fi
-    fi
-
-    tar xzf "$ZLIB_TARBALL"
-    cd "zlib-${ZLIB_VERSION}"
-
-    # Build zlib for WASI manually (bypass configure to avoid macOS libtool issues)
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c adler32.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c crc32.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c deflate.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c infback.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c inffast.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c inflate.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c inftrees.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c trees.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c zutil.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c compress.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c uncompr.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c gzclose.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c gzlib.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c gzread.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_LARGEFILE64_SOURCE=1 -c gzwrite.c
-
-    # Create static library
-    ${WASI_SDK_PATH}/bin/ar rcs libz.a adler32.o crc32.o deflate.o infback.o \
-        inffast.o inflate.o inftrees.o trees.o zutil.o compress.o uncompr.o \
-        gzclose.o gzlib.o gzread.o gzwrite.o
-
-    # Install to /tmp/wasi-zlib
-    mkdir -p /tmp/wasi-zlib/include /tmp/wasi-zlib/lib
-    cp libz.a /tmp/wasi-zlib/lib/
-    cp zlib.h zconf.h /tmp/wasi-zlib/include/
-
-    echo "✓ zlib built for WASI"
-    cd /tmp
-fi
-
-# Build bzip2 for WASI
-echo "Building bzip2 for WASI..."
-cd /tmp
-
-BZIP2_VERSION="1.0.8"
-BZIP2_TARBALL="bzip2-${BZIP2_VERSION}.tar.gz"
-
-if [ ! -f "wasi-bzip2/lib/libbz2.a" ]; then
-    if [ ! -f "$BZIP2_TARBALL" ]; then
-        echo "Downloading bzip2 ${BZIP2_VERSION}..."
-        if command -v wget &> /dev/null; then
-            wget "https://sourceware.org/pub/bzip2/${BZIP2_TARBALL}"
-        elif command -v curl &> /dev/null; then
-            curl -L -O "https://sourceware.org/pub/bzip2/${BZIP2_TARBALL}"
-        else
-            echo "ERROR: Neither wget nor curl found."
-            exit 1
-        fi
-    fi
-
-    tar xzf "$BZIP2_TARBALL"
-    cd "bzip2-${BZIP2_VERSION}"
-
-    # Build bzip2 library only for WASI (skip executables that need signals)
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c blocksort.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c huffman.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c crctable.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c randtable.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c compress.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c decompress.c
-    ${WASI_SDK_PATH}/bin/clang -O2 -D_FILE_OFFSET_BITS=64 -c bzlib.c
-
-    # Create static library
-    ${WASI_SDK_PATH}/bin/ar rcs libbz2.a blocksort.o huffman.o crctable.o \
-        randtable.o compress.o decompress.o bzlib.o
-
-    # Install manually
-    mkdir -p /tmp/wasi-bzip2/{include,lib}
-    cp bzlib.h /tmp/wasi-bzip2/include/
-    cp libbz2.a /tmp/wasi-bzip2/lib/
-
-    echo "✓ bzip2 built for WASI"
-    cd /tmp
-fi
-
-# Build liblzma (xz-utils) for WASI
-echo "Building liblzma for WASI..."
-cd /tmp
-
-XZ_VERSION="5.4.5"
-XZ_TARBALL="xz-${XZ_VERSION}.tar.gz"
-
-if [ ! -f "wasi-xz/lib/liblzma.a" ]; then
-    if [ ! -f "$XZ_TARBALL" ]; then
-        echo "Downloading xz-utils ${XZ_VERSION}..."
-        if command -v wget &> /dev/null; then
-            wget "https://tukaani.org/xz/${XZ_TARBALL}"
-        elif command -v curl &> /dev/null; then
-            curl -L -O "https://tukaani.org/xz/${XZ_TARBALL}"
-        else
-            echo "ERROR: Neither wget nor curl found."
-            exit 1
-        fi
-    fi
-
-    tar xzf "$XZ_TARBALL"
-    cd "xz-${XZ_VERSION}"
-
-    # Configure and build liblzma for WASI
-    CC=${WASI_SDK_PATH}/bin/clang \
-    AR=${WASI_SDK_PATH}/bin/ar \
-    RANLIB=${WASI_SDK_PATH}/bin/ranlib \
-    ./configure \
-        --host=wasm32-wasi \
-        --prefix=/tmp/wasi-xz \
-        --disable-shared \
-        --enable-static \
-        --disable-threads \
-        --disable-xz \
-        --disable-xzdec \
-        --disable-lzmadec \
-        --disable-lzmainfo \
-        --disable-scripts \
-        --disable-doc
-
-    make -j $(sysctl -n hw.ncpu 2>/dev/null || echo 4)
-    make install
-
-    echo "✓ liblzma built for WASI"
-    cd /tmp
-fi
+# Python build uses /tmp for temporary files, but final libs come from deps/
+BUILD_TMP="/tmp/wadup-python-build-$$"
+mkdir -p "$BUILD_TMP"
 
 # Download and build CPython
-echo "Building CPython ${PYTHON_VERSION} for WASI..."
+echo ""
+echo "=== Building CPython ${PYTHON_VERSION} for WASI ==="
 
 # Download CPython
-cd /tmp
+cd "$BUILD_TMP"
 PYTHON_TARBALL="Python-${PYTHON_VERSION}.tar.xz"
 if [ ! -f "$PYTHON_TARBALL" ]; then
     echo "Downloading CPython ${PYTHON_VERSION}..."
-    if command -v wget &> /dev/null; then
-        wget "https://www.python.org/ftp/python/${PYTHON_VERSION}/${PYTHON_TARBALL}"
-    elif command -v curl &> /dev/null; then
+    if command -v curl &> /dev/null; then
         curl -L -O "https://www.python.org/ftp/python/${PYTHON_VERSION}/${PYTHON_TARBALL}"
+    elif command -v wget &> /dev/null; then
+        wget "https://www.python.org/ftp/python/${PYTHON_VERSION}/${PYTHON_TARBALL}"
     else
-        echo "ERROR: Neither wget nor curl found."
+        echo "ERROR: Neither curl nor wget found."
         exit 1
     fi
 fi
@@ -275,9 +83,6 @@ with open('Tools/build/freeze_modules.py', 'r') as f:
 content = content.replace("#'<encodings.*>',", "        '<encodings.*>',")
 
 # Add comprehensive stdlib modules (only if not already added)
-# Use <package.*> for package directories, plain names for single .py files
-# Note: C extension modules (array, binascii, bz2, cmath, io, itertools, lzma,
-#       math, struct, time, unicodedata, zlib) are compiled as built-ins, not frozen
 if "'stdlib - comprehensive'" not in content:
     stdlib_section = """    ('stdlib - comprehensive', [
         '_compression',
@@ -342,7 +147,6 @@ if "'stdlib - comprehensive'" not in content:
     ]),
 """
 
-    # Find TESTS_SECTION and insert before it
     content = content.replace(
         "    (TESTS_SECTION, [",
         stdlib_section + "    (TESTS_SECTION, ["
@@ -361,17 +165,17 @@ echo "Regenerating frozen modules..."
 python3 Tools/build/freeze_modules.py
 
 # Create Setup.local to force modules to be built as builtin modules
-# This embeds them directly into libpython
-cat > Modules/Setup.local << 'EOF'
+# Use paths from deps/ folder
+cat > Modules/Setup.local << EOF
 # Force modules to be built in (statically linked)
 *static*
 
-_sqlite3 _sqlite/blob.c _sqlite/connection.c _sqlite/cursor.c _sqlite/microprotocols.c _sqlite/module.c _sqlite/prepare_protocol.c _sqlite/row.c _sqlite/statement.c _sqlite/util.c -I$(srcdir)/Modules/_sqlite -DMODULE_NAME='"sqlite3"' -DSQLITE_OMIT_LOAD_EXTENSION=1
+_sqlite3 _sqlite/blob.c _sqlite/connection.c _sqlite/cursor.c _sqlite/microprotocols.c _sqlite/module.c _sqlite/prepare_protocol.c _sqlite/row.c _sqlite/statement.c _sqlite/util.c -I\$(srcdir)/Modules/_sqlite -DMODULE_NAME='"sqlite3"' -DSQLITE_OMIT_LOAD_EXTENSION=1
 
 # Compression modules
-zlib zlibmodule.c -I/tmp/wasi-zlib/include -L/tmp/wasi-zlib/lib -lz
-_bz2 _bz2module.c -I/tmp/wasi-bzip2/include -L/tmp/wasi-bzip2/lib -lbz2
-_lzma _lzmamodule.c -I/tmp/wasi-xz/include -L/tmp/wasi-xz/lib -llzma
+zlib zlibmodule.c -I${DEPS_DIR}/wasi-zlib/include -L${DEPS_DIR}/wasi-zlib/lib -lz
+_bz2 _bz2module.c -I${DEPS_DIR}/wasi-bzip2/include -L${DEPS_DIR}/wasi-bzip2/lib -lbz2
+_lzma _lzmamodule.c -I${DEPS_DIR}/wasi-xz/include -L${DEPS_DIR}/wasi-xz/lib -llzma
 
 # Hash module (uses existing HACL* in Python build)
 _hashlib _hashopenssl.c
@@ -380,8 +184,8 @@ EOF
 echo "Building native Python for cross-compilation..."
 mkdir -p builddir/build
 cd builddir/build
-../../configure -C
-make -s -j $(sysctl -n hw.ncpu 2>/dev/null || echo 4) all
+../../configure -C > /dev/null 2>&1
+make -s -j $(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) all
 PYTHON_VERSION_SHORT=$(./python.exe -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 BUILD_PYTHON_PATH=$(pwd)/python.exe
 cd ../..
@@ -391,8 +195,8 @@ export CONFIG_SITE="$(pwd)/Tools/wasm/config.site-wasm32-wasi"
 export WASI_SDK_PATH="${WASI_SDK_PATH}"
 
 # Point Python configure to all WASI library builds
-export CPPFLAGS="-I/tmp/sqlite-wasi/include -I/tmp/wasi-zlib/include -I/tmp/wasi-bzip2/include -I/tmp/wasi-xz/include"
-export LDFLAGS="-L/tmp/sqlite-wasi/lib -L/tmp/wasi-zlib/lib -L/tmp/wasi-bzip2/lib -L/tmp/wasi-xz/lib"
+export CPPFLAGS="-I${DEPS_DIR}/wasi-sqlite/include -I${DEPS_DIR}/wasi-zlib/include -I${DEPS_DIR}/wasi-bzip2/include -I${DEPS_DIR}/wasi-xz/include"
+export LDFLAGS="-L${DEPS_DIR}/wasi-sqlite/lib -L${DEPS_DIR}/wasi-zlib/lib -L${DEPS_DIR}/wasi-bzip2/lib -L${DEPS_DIR}/wasi-xz/lib"
 
 mkdir -p builddir/wasi
 cd builddir/wasi
@@ -402,9 +206,10 @@ cd builddir/wasi
         -C \
         --host=wasm32-unknown-wasi \
         --build=$(../../config.guess) \
-        --with-build-python=${BUILD_PYTHON_PATH}
+        --with-build-python=${BUILD_PYTHON_PATH} \
+        > /dev/null 2>&1
 
-make -s -j $(sysctl -n hw.ncpu 2>/dev/null || echo 4) all
+make -s -j $(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) all
 
 # Copy build artifacts to PYTHON_DIR
 echo "Installing CPython to ${PYTHON_DIR}..."
@@ -428,9 +233,9 @@ if [ -d "Modules/_hacl" ]; then
     echo "  Copied HACL libraries"
 fi
 
-# Copy SQLite library
-if [ -f "/tmp/sqlite-wasi/lib/libsqlite3.a" ]; then
-    cp /tmp/sqlite-wasi/lib/libsqlite3.a "${PYTHON_DIR}/lib/"
+# Copy SQLite library from deps
+if [ -f "${DEPS_DIR}/wasi-sqlite/lib/libsqlite3.a" ]; then
+    cp "${DEPS_DIR}/wasi-sqlite/lib/libsqlite3.a" "${PYTHON_DIR}/lib/"
     echo "  Copied libsqlite3.a"
 fi
 
@@ -438,19 +243,16 @@ fi
 cp -r ../../Include/* "${PYTHON_DIR}/include/"
 cp pyconfig.h "${PYTHON_DIR}/include/"
 
-# Get back to source root
-cd ../..
+# Get back to original dir
+cd "$WADUP_ROOT"
 
-echo "✓ CPython built successfully at ${PYTHON_DIR}"
-
-# Clean up source
-cd /tmp
-rm -rf "Python-${PYTHON_VERSION}"
+# Clean up build temp
+rm -rf "$BUILD_TMP"
 
 echo ""
 echo "===================================================="
 echo "CPython WASI build complete!"
 echo "===================================================="
 echo "Python library: ${PYTHON_DIR}/lib/libpython3.13.a"
-echo "Python headers: ${PYTHON_DIR}/include/python3.13/"
+echo "Python headers: ${PYTHON_DIR}/include/"
 echo ""

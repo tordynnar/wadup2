@@ -16,6 +16,9 @@ examples/*/Cargo.lock
 # Shared Python WASI build
 build/
 
+# Downloaded dependencies (WASI SDK, compression libs, etc.)
+deps/
+
 # Python WASM module build artifacts
 examples/python-*/src/*.o
 examples/python-*/src/script.py.h

@@ -140,7 +140,7 @@ impl WasiCtx {
         let o_creat = (oflags & 1) != 0;
         let o_directory = (oflags & 2) != 0;
         let o_excl = (oflags & 4) != 0;
-        let _o_trunc = (oflags & 8) != 0; // TODO: implement truncation
+        let o_trunc = (oflags & 8) != 0;
 
         // Normalize the path for tracking
         let normalized_path = format!("/{}", path.trim_start_matches('/'));
@@ -168,6 +168,12 @@ impl WasiCtx {
                     if o_excl && o_creat {
                         // O_EXCL with O_CREAT means error if file exists
                         return Errno::Exist;
+                    }
+                    // Truncate file if O_TRUNC is set
+                    if o_trunc {
+                        if file.truncate().is_err() {
+                            return Errno::Io;
+                        }
                     }
                     let new_fd = self.allocate_fd();
                     // Track path for metadata and subcontent files

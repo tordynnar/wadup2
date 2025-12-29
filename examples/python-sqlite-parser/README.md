@@ -38,9 +38,6 @@ The final WASM module is ~26MB and contains everything needed to run Python code
 │  SQLite 3.45.1 (libsqlite3.a)          │
 │  └─ Compiled with WASI, no extensions  │
 ├─────────────────────────────────────────┤
-│  POSIX Stubs (signal_stubs.c)          │
-│  └─ signal(), getpid(), clock(), etc.  │
-├─────────────────────────────────────────┤
 │  Embedded Python Script                │
 │  └─ Parses SQLite, calls wadup API     │
 └─────────────────────────────────────────┘
@@ -97,7 +94,7 @@ make clean && make
 
 This:
 1. Embeds `script.py` into C header file
-2. Compiles C sources (main.c, wadup_module.c, signal_stubs.c)
+2. Compiles C sources (main.c, wadup_module.c)
 3. Links with Python, SQLite, and support libraries
 4. Produces final WASM module
 
@@ -115,7 +112,6 @@ examples/python-sqlite-parser/
 ├── src/
 │   ├── main.c               # Entry point, Python initialization
 │   ├── wadup_module.c       # WADUP C extension for Python
-│   ├── signal_stubs.c       # POSIX function stubs for WASI
 │   └── script.py            # SQLite parsing logic
 ├── target/
 │   └── python_sqlite_parser.wasm  # Final WASM module
@@ -200,26 +196,17 @@ Python's `Tools/build/freeze_modules.py` was modified to include:
 
 These modules are compiled into C code and embedded in `libpython3.13.a`.
 
-### 4. POSIX Function Stubs (signal_stubs.c)
+### 4. POSIX Function Stubs (Provided by WADUP Runtime)
 
-WASI doesn't support many POSIX functions that Python expects. We provide stub implementations:
+WASI doesn't support many POSIX functions that Python expects. WADUP provides these as host imports, so no C stubs are needed in the guest module:
 
-```c
-// Signal handling stubs (no-ops)
-void* __SIG_DFL(void) { return NULL; }
-int signal(int signum, void* handler) { return 0; }
-int raise(int sig) { return 0; }
+- Signal handling: `signal()`, `raise()`, `__SIG_DFL`, `__SIG_IGN`, `__SIG_ERR`
+- Process info: `getpid()`
+- Timing: `clock()`, `times()`
+- Dynamic linking: `dlopen()`, `dlsym()`, `dlclose()`, `dlerror()`
+- Signal info: `strsignal()`
 
-// Process stubs
-int getpid(void) { return 1; }
-
-// Timing stubs (return dummy values)
-long long clock(void) { return 0; }
-long long times(struct tms *buf) { return 0; }
-
-// Dynamic linking stubs (not supported in WASI)
-void* dlopen(const char *filename, int flags) { return NULL; }
-```
+These functions are stub implementations that either no-op or return safe default values.
 
 ### 5. SQLite for WASI
 
@@ -264,7 +251,7 @@ Output:
 **Solution**: These are dependencies of sqlite3. The build script freezes a comprehensive set of stdlib modules.
 
 ### Issue: "unknown import: env::signal"
-**Solution**: WASI doesn't support signal handling. We provide stub implementations in `signal_stubs.c`.
+**Solution**: WASI doesn't support signal handling. WADUP provides stub implementations as host imports. Make sure you're using a recent version of WADUP that includes the POSIX stub functions.
 
 ### Issue: Build fails with "No rule to make target 'Lib/re.py'"
 **Solution**: `re` is a package directory, not a single file. Use `'<re.*>'` pattern instead of `'re'` in the frozen modules list.

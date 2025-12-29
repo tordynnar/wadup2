@@ -70,6 +70,27 @@ impl MemoryFile {
             }
         }
     }
+
+    /// Truncate the file to zero length, resetting position to 0.
+    ///
+    /// For ReadWrite files, this clears the buffer.
+    /// For ReadOnly files, this is a no-op (returns error).
+    pub fn truncate(&self) -> io::Result<()> {
+        match &self.data {
+            MemoryFileData::ReadOnly(_) => {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "Cannot truncate read-only file",
+                ))
+            }
+            MemoryFileData::ReadWrite(buf) => {
+                let mut guard = buf.write();
+                guard.clear();
+                *self.position.write() = 0;
+                Ok(())
+            }
+        }
+    }
 }
 
 impl Read for MemoryFile {

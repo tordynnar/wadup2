@@ -1,6 +1,7 @@
 #!/bin/bash
 # Universal Python WASM module builder for WADUP
 # Builds Python WASM modules using shared runtime components
+# Dependencies are stored in deps/ folder
 
 set -e
 
@@ -27,16 +28,13 @@ OUTPUT_DIR="${3:-}"
 WASM_NAME=$(echo "$MODULE_NAME" | tr '-' '_')
 
 # Detect workspace root
-if [ -z "$WADUP_ROOT" ]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    WADUP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WADUP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEPS_DIR="$WADUP_ROOT/deps"
 
 # Set Python directory
 PYTHON_VERSION="3.13"
-if [ -z "$PYTHON_DIR" ]; then
-    PYTHON_DIR="$WADUP_ROOT/build/python-wasi"
-fi
+PYTHON_DIR="$WADUP_ROOT/build/python-wasi"
 
 # Detect platform for WASI SDK
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -51,11 +49,9 @@ else
     exit 1
 fi
 
-# Set WASI SDK path
+# Set WASI SDK path in deps folder
 WASI_SDK_VERSION="24.0"
-if [ -z "$WASI_SDK_PATH" ]; then
-    WASI_SDK_PATH="/tmp/wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-${WASI_SDK_OS}"
-fi
+WASI_SDK_PATH="$DEPS_DIR/wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-${WASI_SDK_OS}"
 
 # Validate inputs
 if [ ! -f "$SCRIPT_PATH" ]; then
@@ -71,6 +67,13 @@ fi
 
 if [ ! -d "$WASI_SDK_PATH" ]; then
     echo "ERROR: WASI SDK not found at: $WASI_SDK_PATH"
+    echo "Run ./scripts/download-deps.sh first"
+    exit 1
+fi
+
+# Check for compression libraries
+if [ ! -f "$DEPS_DIR/wasi-zlib/lib/libz.a" ]; then
+    echo "ERROR: zlib not found. Run ./scripts/download-deps.sh first"
     exit 1
 fi
 
@@ -95,8 +98,8 @@ echo "  Build dir: $BUILD_DIR"
 # Copy shared C sources
 echo "Copying shared runtime sources..."
 cp "$WADUP_ROOT/python-wadup-guest/src/main.c" "$BUILD_DIR/"
-cp "$WADUP_ROOT/python-wadup-guest/src/signal_stubs.c" "$BUILD_DIR/"
 cp "$WADUP_ROOT/python-wadup-guest/src/wadup_module.c" "$BUILD_DIR/"
+# Note: signal_stubs.c is no longer needed - WADUP provides these as host imports
 
 # Embed Python script
 echo "Embedding Python script..."
@@ -122,21 +125,21 @@ echo "Compiling C sources..."
 cd "$BUILD_DIR"
 
 "$CC" $CFLAGS -c main.c -o main.o
-"$CC" $CFLAGS -c signal_stubs.c -o signal_stubs.o
 "$CC" $CFLAGS -c wadup_module.c -o wadup_module.o
 
 # Link into WASM module
+# Note: signal/getpid/clock/times/raise/strsignal/dl* stubs are now provided by WADUP host
 echo "Linking WASM module..."
-"$CC" $CFLAGS main.o signal_stubs.o wadup_module.o -o "${WASM_NAME}.wasm" \
+"$CC" $CFLAGS main.o wadup_module.o -o "${WASM_NAME}.wasm" \
     -L"$PYTHON_DIR/lib" \
     -lpython${PYTHON_VERSION} \
     "$PYTHON_DIR/lib/libmpdec.a" \
     "$PYTHON_DIR/lib/libexpat.a" \
     "$PYTHON_DIR/lib/libsqlite3.a" \
     $PYTHON_DIR/lib/libHacl_*.a \
-    /tmp/wasi-zlib/lib/libz.a \
-    /tmp/wasi-bzip2/lib/libbz2.a \
-    /tmp/wasi-xz/lib/liblzma.a \
+    "$DEPS_DIR/wasi-zlib/lib/libz.a" \
+    "$DEPS_DIR/wasi-bzip2/lib/libbz2.a" \
+    "$DEPS_DIR/wasi-xz/lib/liblzma.a" \
     -lm \
     $LDFLAGS
 
@@ -148,5 +151,5 @@ cp "${WASM_NAME}.wasm" "$OUTPUT_DIR/"
 cd /
 rm -rf "$BUILD_DIR"
 
-echo "✓ Build successful: $OUTPUT_DIR/${WASM_NAME}.wasm"
+echo "Build successful: $OUTPUT_DIR/${WASM_NAME}.wasm"
 ls -lh "$OUTPUT_DIR/${WASM_NAME}.wasm"

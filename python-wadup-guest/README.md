@@ -12,12 +12,6 @@ This directory contains the shared guest library and runtime components for buil
   - Executes embedded Python scripts via `PyRun_SimpleString`
   - Maintains interpreter state across multiple `process()` calls
 
-- **`src/signal_stubs.c`** - POSIX signal and dynamic loading stubs for WASI
-  - Provides no-op implementations of signal functions (signal, raise, etc.)
-  - Provides stub implementations of dynamic loading functions (dlopen, dlsym, etc.)
-  - Required because WASI does not support POSIX signals or dynamic loading
-  - Allows Python runtime to compile without modifications
-
 - **`src/wadup_module.c`** - The `wadup` Python extension module
   - Provides `wadup.define_table(name, columns)` - Define output table schema
   - Provides `wadup.insert_row(table_name, values)` - Insert data rows
@@ -53,9 +47,10 @@ If you need to customize the runtime behavior:
 
 - **Add Python APIs**: Modify `src/wadup_module.c` to add new functions to the `wadup` module
 - **Change initialization**: Modify `src/main.c` to adjust Python interpreter setup
-- **Add WASI stubs**: Modify `src/signal_stubs.c` to add additional stub functions
 
 Changes here will affect **all** Python WASM modules.
+
+Note: POSIX signal stubs (signal, raise, getpid, etc.) and dynamic loading stubs (dlopen, dlsym, etc.) are provided by the WADUP runtime as host imports, so no C stubs are needed in the guest code.
 
 ## Dependencies
 
