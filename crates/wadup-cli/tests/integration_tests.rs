@@ -812,3 +812,111 @@ fn test_csharp_json_analyzer() {
     println!("✓ File-based sub-content emission verified!");
     println!("✓ No infinite recursion verified!");
 }
+
+#[test]
+fn test_python_multi_file() {
+    // This test verifies:
+    // 1. Multiple Python source files in a project work correctly
+    // 2. Pure-Python dependencies (chardet) are bundled and importable
+    // 3. Cross-module imports work within the project
+
+    // Build the CLI
+    let status = Command::new("cargo")
+        .args(&["build", "--release"])
+        .current_dir(workspace_root())
+        .status()
+        .expect("Failed to build wadup CLI");
+    assert!(status.success(), "CLI build failed");
+
+    // Build Python multi-file module
+    let python_wasm = build_python_module("python-multi-file");
+
+    // Setup modules directory
+    let modules_dir = tempfile::tempdir().unwrap();
+    let dest = modules_dir.path().join("python_multi_file.wasm");
+    fs::copy(&python_wasm, &dest).unwrap();
+
+    // Setup input directory with test files
+    let input_dir = tempfile::tempdir().unwrap();
+
+    // Create a text file with known content
+    let text_content = "Hello World\nThis is a test file\nWith multiple lines\n";
+    fs::write(input_dir.path().join("test.txt"), text_content).unwrap();
+
+    // Create a binary file
+    let binary_content: Vec<u8> = (0..=255).collect();
+    fs::write(input_dir.path().join("binary.bin"), &binary_content).unwrap();
+
+    // Setup output database
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_db = output_dir.path().join("output.db");
+
+    // Run wadup
+    let status = Command::new(wadup_binary())
+        .args(&[
+            "--modules", modules_dir.path().to_str().unwrap(),
+            "--input", input_dir.path().to_str().unwrap(),
+            "--output", output_db.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to run wadup");
+
+    assert!(status.success(), "wadup execution failed");
+
+    // Verify results
+    let conn = rusqlite::Connection::open(&output_db).unwrap();
+
+    // Check that file_analysis table exists
+    let table_exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='file_analysis'",
+        [],
+        |row| row.get::<_, i64>(0)
+    ).unwrap() > 0;
+    assert!(table_exists, "file_analysis table not created");
+
+    // Get all analysis results
+    let results: Vec<(i64, i64, i64, i64, String, f64)> = conn.prepare(
+        "SELECT total_bytes, line_count, word_count, char_count, encoding, encoding_confidence \
+         FROM file_analysis"
+    ).unwrap()
+    .query_map([], |row| {
+        Ok((
+            row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
+            row.get(4)?, row.get(5)?
+        ))
+    })
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap();
+
+    // Should have 2 results (one for each file)
+    assert_eq!(results.len(), 2, "Expected 2 file analysis results, got {}", results.len());
+
+    // Find the text file analysis
+    let text_analysis = results.iter()
+        .find(|(total_bytes, _, _, _, _, _)| *total_bytes == text_content.len() as i64);
+    assert!(text_analysis.is_some(), "Text file analysis not found");
+
+    let (total_bytes, line_count, word_count, char_count, encoding, confidence) = text_analysis.unwrap();
+    assert_eq!(*total_bytes, text_content.len() as i64, "Text file total_bytes mismatch");
+    assert_eq!(*line_count, 3, "Text file line_count mismatch");
+    assert_eq!(*word_count, 10, "Text file word_count mismatch");
+    assert_eq!(*char_count, text_content.len() as i64, "Text file char_count mismatch");
+    // chardet should detect ASCII or UTF-8 for plain text
+    assert!(!encoding.is_empty(), "Text file encoding should be detected");
+    assert!(*confidence > 0.0, "Text file encoding confidence should be > 0");
+
+    // Find the binary file analysis (256 bytes)
+    let binary_analysis = results.iter()
+        .find(|(total_bytes, _, _, _, _, _)| *total_bytes == 256);
+    assert!(binary_analysis.is_some(), "Binary file analysis not found");
+
+    let (total_bytes, _, _, _, _, _) = binary_analysis.unwrap();
+    assert_eq!(*total_bytes, 256, "Binary file total_bytes mismatch");
+
+    println!("✓ Python multi-file module verified:");
+    println!("  - Multiple source files imported correctly");
+    println!("  - chardet dependency bundled and working");
+    println!("  - Text file encoding detected: {} (confidence: {})", encoding, confidence);
+    println!("  - File analysis results correct for both text and binary files");
+}

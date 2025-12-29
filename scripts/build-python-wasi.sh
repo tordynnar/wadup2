@@ -85,6 +85,8 @@ content = content.replace("#'<encodings.*>',", "        '<encodings.*>',")
 # Add comprehensive stdlib modules (only if not already added)
 if "'stdlib - comprehensive'" not in content:
     stdlib_section = """    ('stdlib - comprehensive', [
+        '__future__',
+        '_colorize',
         '_compression',
         'base64',
         'bisect',
@@ -113,6 +115,7 @@ if "'stdlib - comprehensive'" not in content:
         'keyword',
         'linecache',
         'locale',
+        '<logging.*>',
         'lzma',
         'mimetypes',
         'numbers',
@@ -134,6 +137,7 @@ if "'stdlib - comprehensive'" not in content:
         'struct',
         'tarfile',
         'textwrap',
+        'threading',
         '<tomllib.*>',
         'traceback',
         'types',
@@ -142,6 +146,7 @@ if "'stdlib - comprehensive'" not in content:
         'uuid',
         'warnings',
         'weakref',
+        '_weakrefset',
         '<xml.*>',
         '<zipfile.*>',
         '<zoneinfo.*>',

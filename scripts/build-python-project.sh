@@ -185,20 +185,19 @@ cp -r "$PROJECT_DIR/src/$ENTRY_MODULE" "$BUNDLE_DIR/"
 
 # Handle dependencies (if any)
 if [ -n "$DEPENDENCIES" ]; then
-    print_info "Downloading pure-Python dependencies..."
+    print_info "Downloading dependencies (including transitive)..."
     DEPS_TEMP="$BUILD_DIR/deps"
     mkdir -p "$DEPS_TEMP"
 
-    for dep in $DEPENDENCIES; do
-        print_info "  Downloading: $dep"
-        pip download --no-binary :all: --no-deps -d "$DEPS_TEMP" "$dep" 2>/dev/null || {
-            print_warning "  Failed to download $dep as pure Python, trying with binaries..."
-            pip download --no-deps -d "$DEPS_TEMP" "$dep" 2>/dev/null || {
-                print_error "  Failed to download $dep"
-                exit 1
-            }
+    # Download all dependencies at once, letting pip resolve the full dependency tree
+    print_info "  Dependencies: $DEPENDENCIES"
+    pip download --no-binary :all: -d "$DEPS_TEMP" $DEPENDENCIES 2>/dev/null || {
+        print_warning "  Failed to download as pure Python, trying with binaries..."
+        pip download -d "$DEPS_TEMP" $DEPENDENCIES 2>/dev/null || {
+            print_error "  Failed to download dependencies"
+            exit 1
         }
-    done
+    }
 
     # Extract dependencies
     for archive in "$DEPS_TEMP"/*.tar.gz "$DEPS_TEMP"/*.zip; do
@@ -222,16 +221,33 @@ if [ -n "$DEPENDENCIES" ]; then
         [[ "$pkg_name" == *.zip ]] && continue
 
         # Look for the actual Python package inside
+        # Try src/ layout first (e.g., attrs uses src/attr/)
         if [ -d "$pkg_dir/src" ]; then
             for subpkg in "$pkg_dir/src"/*/; do
                 [ -d "$subpkg" ] || continue
                 [ -f "$subpkg/__init__.py" ] || continue
+                # Remove trailing slash to copy directory, not contents
+                subpkg="${subpkg%/}"
                 cp -r "$subpkg" "$BUNDLE_DIR/"
                 print_success "  Added: $(basename "$subpkg")"
             done
-        elif [ -f "$pkg_dir/__init__.py" ]; then
-            cp -r "$pkg_dir" "$BUNDLE_DIR/"
-            print_success "  Added: $pkg_name"
+        else
+            # Try flat layout (e.g., chardet uses chardet-5.2.0/chardet/)
+            for subpkg in "$pkg_dir"/*/; do
+                [ -d "$subpkg" ] || continue
+                [ -f "$subpkg/__init__.py" ] || continue
+                subpkg_name=$(basename "$subpkg")
+                # Skip common non-package directories
+                [[ "$subpkg_name" == tests ]] && continue
+                [[ "$subpkg_name" == test ]] && continue
+                [[ "$subpkg_name" == docs ]] && continue
+                [[ "$subpkg_name" == examples ]] && continue
+                [[ "$subpkg_name" == .* ]] && continue
+                # Remove trailing slash to copy directory, not contents
+                subpkg="${subpkg%/}"
+                cp -r "$subpkg" "$BUNDLE_DIR/"
+                print_success "  Added: $(basename "$subpkg")"
+            done
         fi
     done
 
@@ -250,6 +266,8 @@ if [ -n "$DEPENDENCIES" ]; then
             [[ "$subname" == *.data ]] && continue
 
             if [ -f "$subdir/__init__.py" ]; then
+                # Remove trailing slash to copy directory, not contents
+                subdir="${subdir%/}"
                 cp -r "$subdir" "$BUNDLE_DIR/"
                 print_success "  Added: $subname"
             fi
