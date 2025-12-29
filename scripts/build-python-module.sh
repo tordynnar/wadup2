@@ -50,8 +50,9 @@ else
 fi
 
 # Set WASI SDK path in deps folder
-WASI_SDK_VERSION="24.0"
+WASI_SDK_VERSION="29.0"
 WASI_SDK_PATH="$DEPS_DIR/wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-${WASI_SDK_OS}"
+WASI_SYSROOT="$WASI_SDK_PATH/share/wasi-sysroot"
 
 # Validate inputs
 if [ ! -f "$SCRIPT_PATH" ]; then
@@ -117,8 +118,13 @@ echo "\"$ESCAPED\"" > "$BUILD_DIR/script.py.h"
 
 # Compiler and linker settings
 CC="$WASI_SDK_PATH/bin/clang"
-CFLAGS="-O2 -D_WASI_EMULATED_PROCESS_CLOCKS -I$PYTHON_DIR/include -fvisibility=default"
+# Enable WASI emulated POSIX functions (signal, getpid, process clocks)
+# Note: dlopen/dlsym/dlclose/dlerror are still provided by WADUP host (WASI doesn't support dynamic loading)
+CFLAGS="-O2 -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_GETPID -D_WASI_EMULATED_PROCESS_CLOCKS -I$PYTHON_DIR/include -fvisibility=default"
 LDFLAGS="-Wl,--allow-undefined -Wl,--export=process -Wl,--initial-memory=134217728 -Wl,--max-memory=268435456 -Wl,--no-entry"
+
+# WASI emulated libraries path
+WASI_EMU_LIBS="$WASI_SYSROOT/lib/wasm32-wasip1"
 
 # Compile C sources
 echo "Compiling C sources..."
@@ -128,7 +134,8 @@ cd "$BUILD_DIR"
 "$CC" $CFLAGS -c wadup_module.c -o wadup_module.o
 
 # Link into WASM module
-# Note: signal/getpid/clock/times/raise/strsignal/dl* stubs are now provided by WADUP host
+# WASI emulated libraries provide: signal, raise, strsignal, __SIG_IGN, __SIG_ERR, getpid, clock, times
+# Note: dlopen/dlsym/dlclose/dlerror stubs are still provided by WADUP host (WASI doesn't support dynamic loading)
 echo "Linking WASM module..."
 "$CC" $CFLAGS main.o wadup_module.o -o "${WASM_NAME}.wasm" \
     -L"$PYTHON_DIR/lib" \
@@ -140,6 +147,9 @@ echo "Linking WASM module..."
     "$DEPS_DIR/wasi-zlib/lib/libz.a" \
     "$DEPS_DIR/wasi-bzip2/lib/libbz2.a" \
     "$DEPS_DIR/wasi-xz/lib/liblzma.a" \
+    "$WASI_EMU_LIBS/libwasi-emulated-signal.a" \
+    "$WASI_EMU_LIBS/libwasi-emulated-getpid.a" \
+    "$WASI_EMU_LIBS/libwasi-emulated-process-clocks.a" \
     -lm \
     $LDFLAGS
 

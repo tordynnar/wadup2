@@ -48,14 +48,14 @@ The final WASM module is ~26MB and contains everything needed to run Python code
 ### System Requirements
 - **macOS** (tested on macOS with Apple Silicon)
 - **Python 3.13** (for regenerating frozen modules)
-- **WASI SDK 24.0** (automatically downloaded by build script)
+- **WASI SDK 29.0** (automatically downloaded by build script)
 - **Standard build tools**: make, tar, unzip, wget/curl
 
 ### Build Dependencies
 The build script (`build-python.sh`) automatically handles:
 - Downloading Python 3.13.7 source
-- Downloading SQLite 3.45.1 amalgamation
-- Downloading WASI SDK 24.0
+- Downloading SQLite 3.51.1 amalgamation
+- Downloading WASI SDK 29.0
 - Building everything from source
 
 ## Building
@@ -196,17 +196,19 @@ Python's `Tools/build/freeze_modules.py` was modified to include:
 
 These modules are compiled into C code and embedded in `libpython3.13.a`.
 
-### 4. POSIX Function Stubs (Provided by WADUP Runtime)
+### 4. POSIX Function Stubs
 
-WASI doesn't support many POSIX functions that Python expects. WADUP provides these as host imports, so no C stubs are needed in the guest module:
+WASI doesn't support many POSIX functions that Python expects. These are provided by two sources:
 
-- Signal handling: `signal()`, `raise()`, `__SIG_DFL`, `__SIG_IGN`, `__SIG_ERR`
-- Process info: `getpid()`
-- Timing: `clock()`, `times()`
-- Dynamic linking: `dlopen()`, `dlsym()`, `dlclose()`, `dlerror()`
-- Signal info: `strsignal()`
+**WASI SDK 29.0 Emulated Libraries** (linked into the WASM module):
+- Signal handling: `signal()`, `raise()`, `__SIG_IGN`, `__SIG_ERR`, `strsignal()` (from `libwasi-emulated-signal.a`)
+- Process info: `getpid()` (from `libwasi-emulated-getpid.a`)
+- Timing: `clock()`, `times()` (from `libwasi-emulated-process-clocks.a`)
 
-These functions are stub implementations that either no-op or return safe default values.
+**WADUP Runtime** (provided as host imports):
+- Dynamic linking: `dlopen()`, `dlsym()`, `dlclose()`, `dlerror()` (WASI doesn't support dynamic loading)
+
+These are stub implementations that either no-op or return safe default values.
 
 ### 5. SQLite for WASI
 

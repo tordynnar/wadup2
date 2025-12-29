@@ -50,10 +50,15 @@ If you need to customize the runtime behavior:
 
 Changes here will affect **all** Python WASM modules.
 
-Note: POSIX signal stubs (signal, raise, getpid, etc.) and dynamic loading stubs (dlopen, dlsym, etc.) are provided by the WADUP runtime as host imports, so no C stubs are needed in the guest code.
+Note: POSIX stubs are provided by two sources:
+- **WASI SDK 29.0 emulated libraries**: signal, raise, getpid, clock, times, strsignal (linked into the WASM module)
+- **WADUP runtime**: dlopen, dlsym, dlclose, dlerror (WASI doesn't support dynamic loading)
+
+No C stubs are needed in the guest code.
 
 ## Dependencies
 
 - CPython 3.13+ compiled for WASI (see `scripts/build-python-wasi.sh`)
-- WASI SDK 24.0 or later
+- WASI SDK 29.0 or later
+- WASI emulated libraries: libwasi-emulated-signal.a, libwasi-emulated-getpid.a, libwasi-emulated-process-clocks.a
 - Required Python libraries: libpython3.13.a, libmpdec.a, libexpat.a, libsqlite3.a, etc.
