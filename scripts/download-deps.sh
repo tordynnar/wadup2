@@ -22,12 +22,13 @@ else
 fi
 
 # Versions
-WASI_SDK_VERSION="24.0"
+WASI_SDK_VERSION="29.0"
+WASI_SDK_MAJOR="${WASI_SDK_VERSION%%.*}"  # Extract major version (29 from 29.0)
 ZLIB_VERSION="1.3.1"
 BZIP2_VERSION="1.0.8"
-XZ_VERSION="5.4.5"
-SQLITE_VERSION="3450100"
-SQLITE_YEAR="2024"
+XZ_VERSION="5.8.2"
+SQLITE_VERSION="3510100"
+SQLITE_YEAR="2025"
 
 # Create deps directory
 mkdir -p "$DEPS_DIR"
@@ -65,7 +66,7 @@ echo "1. WASI SDK ${WASI_SDK_VERSION}"
 if [ -d "$WASI_SDK_PATH" ]; then
     echo "  Already installed: $WASI_SDK_NAME"
 else
-    download "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-24/${WASI_SDK_NAME}.tar.gz" "$DEPS_DIR/${WASI_SDK_NAME}.tar.gz"
+    download "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_MAJOR}/${WASI_SDK_NAME}.tar.gz" "$DEPS_DIR/${WASI_SDK_NAME}.tar.gz"
     echo "  Extracting..."
     tar xzf "$DEPS_DIR/${WASI_SDK_NAME}.tar.gz" -C "$DEPS_DIR"
     echo "  Installed: $WASI_SDK_NAME"
