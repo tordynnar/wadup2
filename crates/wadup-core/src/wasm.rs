@@ -185,8 +185,10 @@ impl ModuleInstance {
         // Create in-memory filesystem
         let filesystem = Arc::new(MemoryFilesystem::new());
 
-        // Create /tmp directory
+        // Create directories for WASI filesystem
         filesystem.create_dir_all("/tmp")?;
+        filesystem.create_dir_all("/metadata")?;
+        filesystem.create_dir_all("/subcontent")?;
 
         // Create empty /data.bin file
         filesystem.create_file("/data.bin", Vec::new())?;
@@ -221,9 +223,6 @@ impl ModuleInstance {
 
         // Add WASI Preview1 functions
         Self::add_wasi_functions(&mut linker)?;
-
-        // Add host functions
-        Self::add_host_functions(&mut linker)?;
 
         let instance = linker.instantiate(&mut store, module)?;
 
@@ -920,106 +919,6 @@ impl ModuleInstance {
         Ok(())
     }
 
-    fn add_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
-        use crate::bindings_context::{MetadataRow, SubContentEmission, SubContentData};
-        use crate::bindings_types::{Column, Value, TableSchema};
-
-        // Helper to get memory
-        fn get_memory<T>(caller: &mut Caller<T>) -> Result<Memory> {
-            caller.get_export("memory")
-                .and_then(|e| e.into_memory())
-                .ok_or_else(|| anyhow::anyhow!("No memory export found"))
-        }
-
-        // Helper to read string
-        fn read_string<T>(caller: &mut Caller<T>, memory: Memory, ptr: i32, len: i32) -> Result<String> {
-            if ptr < 0 || len < 0 {
-                anyhow::bail!("Invalid pointer or length");
-            }
-            let mut buffer = vec![0u8; len as usize];
-            memory.read(caller, ptr as usize, &mut buffer)?;
-            Ok(String::from_utf8(buffer)?)
-        }
-
-        linker.func_wrap(
-            "env",
-            "define_table",
-            |mut caller: Caller<StoreData>, name_ptr: i32, name_len: i32, cols_ptr: i32, cols_len: i32| -> Result<i32> {
-                let memory = get_memory(&mut caller)?;
-                let table_name = read_string(&mut caller, memory, name_ptr, name_len)?;
-                let columns_json = read_string(&mut caller, memory, cols_ptr, cols_len)?;
-                let columns: Vec<Column> = serde_json::from_str(&columns_json)?;
-                caller.data_mut().processing_ctx.table_schemas.push(TableSchema {
-                    name: table_name,
-                    columns,
-                });
-                Ok(0)
-            },
-        )?;
-
-        linker.func_wrap(
-            "env",
-            "insert_row",
-            |mut caller: Caller<StoreData>, table_ptr: i32, table_len: i32, row_ptr: i32, row_len: i32| -> Result<i32> {
-                let memory = get_memory(&mut caller)?;
-                let table_name = read_string(&mut caller, memory, table_ptr, table_len)?;
-                let row_json = read_string(&mut caller, memory, row_ptr, row_len)?;
-                let values: Vec<Value> = serde_json::from_str(&row_json)?;
-                caller.data_mut().processing_ctx.metadata.push(MetadataRow {
-                    table_name,
-                    values,
-                });
-                Ok(0)
-            },
-        )?;
-
-        linker.func_wrap(
-            "env",
-            "emit_subcontent_bytes",
-            |mut caller: Caller<StoreData>, data_ptr: i32, data_len: i32, fname_ptr: i32, fname_len: i32| -> Result<i32> {
-                if data_ptr < 0 || data_len < 0 {
-                    anyhow::bail!("Invalid data pointer or length");
-                }
-                let memory = get_memory(&mut caller)?;
-                let mut data = vec![0u8; data_len as usize];
-                memory.read(&caller, data_ptr as usize, &mut data)?;
-                let filename = read_string(&mut caller, memory, fname_ptr, fname_len)?;
-                caller.data_mut().processing_ctx.subcontent.push(SubContentEmission {
-                    // Convert Vec<u8> to Bytes (takes ownership of allocation, no copy)
-                    data: SubContentData::Bytes(bytes::Bytes::from(data)),
-                    filename,
-                });
-                Ok(0)
-            },
-        )?;
-
-        linker.func_wrap(
-            "env",
-            "emit_subcontent_slice",
-            |mut caller: Caller<StoreData>, offset: i32, length: i32, fname_ptr: i32, fname_len: i32| -> Result<i32> {
-                if offset < 0 || length < 0 {
-                    anyhow::bail!("Invalid offset or length");
-                }
-                let content_size = caller.data().processing_ctx.content_data.len();
-                if (offset as usize + length as usize) > content_size {
-                    anyhow::bail!("Slice out of bounds");
-                }
-                let memory = get_memory(&mut caller)?;
-                let filename = read_string(&mut caller, memory, fname_ptr, fname_len)?;
-                caller.data_mut().processing_ctx.subcontent.push(SubContentEmission {
-                    data: SubContentData::Slice {
-                        offset: offset as usize,
-                        length: length as usize,
-                    },
-                    filename,
-                });
-                Ok(0)
-            },
-        )?;
-
-        Ok(())
-    }
-
     pub fn process_content(
         &mut self,
         content_uuid: uuid::Uuid,
@@ -1062,9 +961,15 @@ impl ModuleInstance {
             anyhow::bail!("Module '{}' process function has unsupported signature", self.name);
         };
 
+        // Get filesystem reference before borrowing store mutably
+        let filesystem = self.store.data().wasi_ctx.filesystem.clone();
+
         // Check result
         match result {
             Ok(0) => {
+                // Process any remaining metadata files that weren't closed before process() returned
+                Self::process_remaining_metadata_files(&filesystem, &mut self.store)?;
+
                 // Success - extract context
                 let ctx = &mut self.store.data_mut().processing_ctx;
                 let extracted = ProcessingContext {
@@ -1138,7 +1043,6 @@ impl ModuleInstance {
         // Create a new linker
         let mut linker = Linker::new(&self.engine);
         Self::add_wasi_functions(&mut linker)?;
-        Self::add_host_functions(&mut linker)?;
 
         // Instantiate the module fresh
         let instance = linker.instantiate(&mut store, &self.module)?;
@@ -1175,7 +1079,7 @@ impl ModuleInstance {
             eprintln!("WADUP: _start completed, checking for remaining metadata files");
 
             // Success - process any remaining metadata files that weren't closed before _start returned
-            self.process_remaining_metadata_files(&filesystem, &mut store)?;
+            Self::process_remaining_metadata_files(&filesystem, &mut store)?;
 
             // Extract context
             let ctx = &mut store.data_mut().processing_ctx;
@@ -1286,12 +1190,11 @@ impl ModuleInstance {
         });
     }
 
-    /// Process any remaining metadata files after _start completes.
+    /// Process any remaining metadata files after _start or process() completes.
     ///
-    /// This is a fallback for files that weren't closed before _start returned.
+    /// This is a fallback for files that weren't closed before the module function returned.
     /// Files are deleted after being processed.
     fn process_remaining_metadata_files(
-        &self,
         filesystem: &Arc<MemoryFilesystem>,
         store: &mut Store<StoreData>,
     ) -> Result<()> {

@@ -1,4 +1,4 @@
-pub mod ffi;
+pub mod metadata;
 pub mod types;
 pub mod table;
 pub mod content;

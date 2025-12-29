@@ -24,5 +24,8 @@ fn run() -> Result<(), String> {
     // Insert the size
     table.insert(&[Value::Int64(size)])?;
 
+    // Flush metadata to file for WADUP to process
+    flush()?;
+
     Ok(())
 }

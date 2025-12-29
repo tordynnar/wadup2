@@ -39,6 +39,9 @@ def main():
             wadup.insert_row("db_table_stats", [table_name, count])
 
         conn.close()
+
+        # Flush metadata to file for WADUP to process
+        wadup.flush()
     except Exception as e:
         # Silently ignore errors - file might not be a valid SQLite database
         pass

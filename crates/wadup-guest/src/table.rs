@@ -1,4 +1,4 @@
-use crate::ffi;
+use crate::metadata;
 use crate::types::{Column, DataType, Value};
 
 pub struct Table {
@@ -17,43 +17,22 @@ impl Table {
             })
             .collect();
 
-        let columns_json = serde_json::to_string(&cols)
-            .map_err(|e| format!("Failed to serialize columns: {}", e))?;
-
-        unsafe {
-            let result = ffi::define_table(
-                name.as_ptr(),
-                name.len(),
-                columns_json.as_ptr(),
-                columns_json.len(),
-            );
-
-            if result < 0 {
-                return Err(format!("Failed to define table '{}'", name));
-            }
-        }
+        metadata::add_table(name.clone(), cols);
 
         Ok(Table { name })
     }
 
     pub fn insert(&self, values: &[Value]) -> Result<(), String> {
-        let values_json = serde_json::to_string(values)
-            .map_err(|e| format!("Failed to serialize values: {}", e))?;
-
-        unsafe {
-            let result = ffi::insert_row(
-                self.name.as_ptr(),
-                self.name.len(),
-                values_json.as_ptr(),
-                values_json.len(),
-            );
-
-            if result < 0 {
-                return Err(format!("Failed to insert row into '{}'", self.name));
-            }
-        }
-
+        metadata::add_row(self.name.clone(), values.to_vec());
         Ok(())
+    }
+
+    /// Flush accumulated metadata to file.
+    ///
+    /// This is optional - WADUP will automatically process any unflushed
+    /// metadata after the module's process() function returns.
+    pub fn flush() -> Result<(), String> {
+        metadata::flush()
     }
 }
 
@@ -78,4 +57,12 @@ impl TableBuilder {
     pub fn build(self) -> Result<Table, String> {
         Table::define(self.name, self.columns)
     }
+}
+
+/// Flush accumulated metadata to file.
+///
+/// This is optional - WADUP will automatically process any unflushed
+/// metadata after the module's process() function returns.
+pub fn flush() -> Result<(), String> {
+    metadata::flush()
 }

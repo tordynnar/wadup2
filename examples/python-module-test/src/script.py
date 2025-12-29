@@ -36,5 +36,8 @@ def main():
         except Exception as e:
             wadup.insert_row("c_extension_imports", [module_name, 0, f"Unexpected error: {str(e)}"])
 
+    # Flush metadata to file for WADUP to process
+    wadup.flush()
+
 if __name__ == "__main__":
     main()

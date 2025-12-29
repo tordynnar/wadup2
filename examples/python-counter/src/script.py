@@ -17,5 +17,8 @@ def main():
     # Insert the current call count
     wadup.insert_row("call_counter", [call_count])
 
+    # Flush metadata to file for WADUP to process
+    wadup.flush()
+
 if __name__ == "__main__":
     main()

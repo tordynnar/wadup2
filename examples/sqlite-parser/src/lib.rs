@@ -37,6 +37,9 @@ fn run() -> Result<(), String> {
         ])?;
     }
 
+    // Flush metadata to file for WADUP to process
+    flush()?;
+
     Ok(())
 }
 

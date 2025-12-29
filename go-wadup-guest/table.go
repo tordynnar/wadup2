@@ -1,10 +1,5 @@
 package wadup
 
-import (
-	"encoding/json"
-	"fmt"
-)
-
 // Table represents a defined table that can accept row insertions
 type Table struct {
 	name string
@@ -12,41 +7,13 @@ type Table struct {
 
 // DefineTable defines a new table with the given columns
 func DefineTable(name string, columns []Column) (*Table, error) {
-	// Serialize columns to JSON
-	columnsJSON, err := json.Marshal(columns)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize columns: %w", err)
-	}
-
-	// Call FFI
-	namePtr, nameLen := stringToFFI(name)
-	colPtr, colLen := stringToFFI(string(columnsJSON))
-
-	result := defineTableFFI(namePtr, nameLen, colPtr, colLen)
-	if result < 0 {
-		return nil, fmt.Errorf("failed to define table '%s': error code %d", name, result)
-	}
-
+	addTable(name, columns)
 	return &Table{name: name}, nil
 }
 
 // InsertRow inserts a row of values into the table
 func (t *Table) InsertRow(values []Value) error {
-	// Serialize values to JSON
-	valuesJSON, err := json.Marshal(values)
-	if err != nil {
-		return fmt.Errorf("failed to serialize values: %w", err)
-	}
-
-	// Call FFI
-	namePtr, nameLen := stringToFFI(t.name)
-	valPtr, valLen := stringToFFI(string(valuesJSON))
-
-	result := insertRowFFI(namePtr, nameLen, valPtr, valLen)
-	if result < 0 {
-		return fmt.Errorf("failed to insert row into '%s': error code %d", t.name, result)
-	}
-
+	addRow(t.name, values)
 	return nil
 }
 

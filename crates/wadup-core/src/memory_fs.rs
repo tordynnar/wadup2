@@ -14,10 +14,22 @@ pub enum MemoryFileData {
 }
 
 /// In-memory file with Read/Write/Seek support
-#[derive(Clone)]
+///
+/// Note: Clone is manually implemented to share data but reset position to 0.
+/// This is critical for correct behavior when opening the same file multiple times.
 pub struct MemoryFile {
     data: MemoryFileData,
     position: Arc<RwLock<usize>>,
+}
+
+impl Clone for MemoryFile {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            // Each clone gets its own position starting at 0, like opening a new file handle
+            position: Arc::new(RwLock::new(0)),
+        }
+    }
 }
 
 impl MemoryFile {

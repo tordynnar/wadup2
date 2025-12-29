@@ -80,7 +80,8 @@ func run() error {
 		}
 	}
 
-	return nil
+	// Flush metadata to file for WADUP to process
+	return wadup.Flush()
 }
 
 func isSQLiteDatabase() (bool, error) {
