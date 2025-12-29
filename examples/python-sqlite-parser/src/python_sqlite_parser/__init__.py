@@ -1,7 +1,14 @@
+"""Python SQLite parser WADUP module.
+
+Parses SQLite database files and extracts table statistics.
+Uses Python's built-in sqlite3 module (from frozen stdlib).
+"""
 import sqlite3
 import wadup
 
+
 def main():
+    """Entry point called by WADUP for each file processed."""
     db_path = "/data.bin"
 
     # Validate SQLite header
@@ -45,6 +52,3 @@ def main():
     except Exception as e:
         # Silently ignore errors - file might not be a valid SQLite database
         pass
-
-if __name__ == "__main__":
-    main()

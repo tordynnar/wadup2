@@ -1,31 +1,26 @@
 # Makefile for python-module-test WASM module
-# This is a thin wrapper around the shared build script
-
-# Detect module name from directory
-MODULE_NAME := $(notdir $(CURDIR))
+# Builds a Python WADUP module from pyproject.toml
 
 # Find workspace root (go up from examples/MODULE_NAME)
 WADUP_ROOT := $(shell cd $(CURDIR)/../.. && pwd)
 
 # Paths
-BUILD_SCRIPT := $(WADUP_ROOT)/scripts/build-python-module.sh
-SCRIPT_PY := $(CURDIR)/src/script.py
+BUILD_SCRIPT := $(WADUP_ROOT)/scripts/build-python-project.sh
+PROJECT_DIR := $(CURDIR)
 TARGET_DIR := $(CURDIR)/target
-TARGET := $(TARGET_DIR)/$(subst -,_,$(MODULE_NAME)).wasm
 
 # Default target
-all: $(TARGET)
+all: build
 
-# Build using shared script
-$(TARGET): $(SCRIPT_PY)
-	@echo "Building $(MODULE_NAME) WASM module..."
-	@mkdir -p $(TARGET_DIR)
-	$(BUILD_SCRIPT) $(MODULE_NAME) $(SCRIPT_PY) $(TARGET_DIR)
+# Build using project build script
+build:
+	@echo "Building python-module-test WASM module..."
+	$(BUILD_SCRIPT) $(PROJECT_DIR)
 
 # Clean build artifacts
 clean:
-	rm -f $(TARGET)
-	@echo "✓ Cleaned $(MODULE_NAME)"
+	rm -rf $(TARGET_DIR)
+	@echo "✓ Cleaned python-module-test"
 
 # Compatibility: allow 'make python-check' to succeed
 python-check:
@@ -34,4 +29,4 @@ python-check:
 		exit 1; \
 	fi
 
-.PHONY: all clean python-check
+.PHONY: all build clean python-check

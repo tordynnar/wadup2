@@ -1,0 +1,8 @@
+[project]
+name = "python-sqlite-parser"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.wadup]
+entry-point = "python_sqlite_parser"
