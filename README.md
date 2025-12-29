@@ -47,8 +47,8 @@ WADUP modules can be written in **Rust**, **Python**, **Go**, or **C#**, all com
 Each WASM module runs in a sandboxed virtual filesystem where:
 - **`/data.bin`** - The content being processed (read-only, zero-copy reference)
 - **`/tmp/`** - Available for temporary files (read-write)
-- **`/metadata/`** - For file-based metadata output (C# modules)
-- **`/subcontent/`** - For file-based sub-content emission (C# modules)
+- **`/metadata/`** - For file-based metadata output (all languages)
+- **`/subcontent/`** - For file-based sub-content emission (all languages)
 
 Modules can access content using standard file I/O operations. The `/data.bin` file is a zero-copy reference to the content data, implemented using `bytes::Bytes` for optimal memory efficiency.
 
@@ -56,18 +56,20 @@ Modules can access content using standard file I/O operations. The `/data.bin` f
 
 WADUP supports four languages for writing modules:
 
-| Language | Entry Point | Module Pattern | Interface | WASM Size | Build Time |
-|----------|-------------|----------------|-----------|-----------|------------|
-| **Rust** | `process()` | Reused | FFI API | ~2.5 MB | ~30s |
-| **Python** | `process()` | Reused | FFI API | ~20 MB | ~5m (first) |
-| **Go** | `process()` | Reused | FFI API | ~8.3 MB | ~10s |
-| **C#** | `_start` | Reload-per-call | File-based | ~17 MB | ~15s |
+| Language | Entry Point | Module Pattern | WASM Size | Build Time |
+|----------|-------------|----------------|-----------|------------|
+| **Rust** | `process()` | Reused | ~2.5 MB | ~30s |
+| **Python** | `main()` | Reused | ~29 MB | ~5m (first) |
+| **Go** | `process()` | Reused | ~8.3 MB | ~10s |
+| **C#** | `_start` | Reload-per-call | ~17 MB | ~15s |
+
+All languages use file-based metadata output (writing JSON to `/metadata/*.json`). Guest libraries handle serialization automatically.
 
 **Rust** modules export a `process()` function and are reused across files (one instance processes all files per thread).
 
-**Python** modules use embedded CPython 3.13.7 and are also reused (interpreter initialized once per thread).
+**Python** modules use embedded CPython 3.13.7 with a `main()` function entry point. Supports pure-Python third-party dependencies bundled into the WASM module.
 
-**Go** modules export a `process()` function using `//go:wasmexport` and are reused like Rust/Python.
+**Go** modules export a `process()` function using `//go:wasmexport` and are reused like Rust.
 
 **C#** modules use the `_start` entry point with reload-per-call (fresh instance per file).
 
@@ -77,30 +79,9 @@ See language-specific guides:
 - [Go Guide](examples/go-sqlite-parser/README.md)
 - [C# Guide](examples/csharp-json-analyzer/README.md)
 
-### Module Interface Methods
+### Module Interface: File-Based Communication
 
-WADUP supports two methods for modules to output metadata:
-
-#### 1. FFI API (Rust, Python, Go)
-
-Modules import host functions directly via WebAssembly imports:
-
-```
-define_table(name_ptr, name_len, columns_ptr, columns_len) -> i32
-insert_row(table_ptr, table_len, row_ptr, row_len) -> i32
-emit_subcontent(name_ptr, name_len, data_ptr, data_len) -> i32
-```
-
-These are wrapped by language-specific guest libraries (`wadup-guest`, `python-wadup-guest`, `go-wadup-guest`) providing ergonomic APIs.
-
-**Advantages:**
-- Immediate processing (no file I/O overhead)
-- Module reuse across files (reactor pattern)
-- Zero-copy data sharing where possible
-
-#### 2. File-Based Communication (C#)
-
-Modules write JSON to special directories:
+All WADUP modules use file-based communication to output metadata. Modules write JSON to special directories in the virtual filesystem:
 
 **Metadata** (`/metadata/*.json`):
 ```json
@@ -124,15 +105,14 @@ Modules write JSON to special directories:
 WADUP processes these files immediately when the metadata file is closed (via `fd_close`). The data is extracted as `Bytes` without copying (the `BytesMut` is frozen directly into `Bytes`), then passed to nested processing zero-copy.
 
 **Advantages:**
-- Works with languages that don't support custom WASM imports (like .NET WASI SDK)
-- Uses standard file I/O (no FFI complexity)
+- Uses standard file I/O (works with any WASM-compatible language)
 - Incremental flushing supported (write multiple files during processing)
 - Both metadata and sub-content supported via file-based interface
 - **Zero-copy sub-content**: Data flows from WASM write → nested processing without copying
 
-**Trade-offs:**
-- Module reloaded for each file (command pattern)
-- Per-file overhead (~200ms for .NET runtime initialization)
+**Module Patterns:**
+- **Rust/Python/Go** (reactor): Module reused across files, minimal overhead
+- **C#** (command): Module reloaded for each file, ~200ms overhead per file
 
 ### Example: File Size Counter (Rust)
 
@@ -163,6 +143,34 @@ fn run() -> Result<(), String> {
 
     Ok(())
 }
+```
+
+### Example: File Analyzer (Python)
+
+```python
+# src/my_module/__init__.py
+import wadup
+
+def main():
+    """Entry point called by WADUP for each file."""
+    # Read input file from virtual filesystem
+    with open('/data.bin', 'rb') as f:
+        data = f.read()
+
+    # Define metadata table
+    wadup.define_table("file_stats", [
+        ("size_bytes", "Int64"),
+        ("line_count", "Int64"),
+    ])
+
+    # Insert row
+    wadup.insert_row("file_stats", [
+        len(data),
+        data.count(b'\n'),
+    ])
+
+    # Flush metadata to output
+    wadup.flush()
 ```
 
 ### Building WASM Modules
@@ -263,20 +271,21 @@ This architecture makes WADUP suitable for batch processing large numbers of fil
 Language-specific libraries for WASM module authors:
 
 **wadup-guest** (Rust):
-- **Content API**: Read content data and metadata
-- **Table API**: Define schemas and insert rows
-- **SubContent API**: Emit sub-content for recursive processing
-- Uses FFI imports to host functions
+- File-based metadata output (writes JSON to `/metadata/*.json`)
+- **Table API**: `TableBuilder::new("name").column(...).build()`
+- **SubContent API**: `SubContent::emit_bytes()`, `SubContent::emit_slice()`
+- Automatic flush on module completion
 
 **python-wadup-guest** (Python):
-- Embedded Python extension module providing `wadup.define_table()` and `wadup.insert_row()`
-- C-based FFI bridge to host functions
-- Used by all Python WASM modules
+- Pure-Python `wadup` library providing `wadup.define_table()`, `wadup.insert_row()`, and `wadup.flush()`
+- File-based communication (writes JSON to `/metadata/*.json`)
+- Bundled into WASM modules along with project source and dependencies
+- Supports pure-Python third-party dependencies (e.g., `chardet`, `humanize`)
 
 **go-wadup-guest** (Go):
-- Pure Go library with `//go:wasmimport` FFI bindings
-- Table builder API: `wadup.NewTableBuilder()`
-- Value types: `wadup.Int64`, `wadup.String`, `wadup.Float64`
+- File-based metadata output (writes JSON to `/metadata/*.json`)
+- Table builder API: `wadup.NewTableBuilder("name").Column(...).Build()`
+- Value types: `wadup.NewInt64()`, `wadup.NewString()`, `wadup.NewFloat64()`
 
 **csharp-wadup-guest** (C#):
 - File-based metadata output (writes JSON to `/metadata/*.json`)
@@ -383,7 +392,8 @@ See the `examples/` directory for working WASM modules:
 **Python Modules:**
 - **python-sqlite-parser**: Parses SQLite databases using CPython 3.13.7
 - **python-counter**: Demonstrates module reuse with global state
-- **python-module-test**: Tests C extension imports
+- **python-module-test**: Tests C extension imports (sqlite3, json, etc.)
+- **python-multi-file**: Multi-file project with third-party dependencies (chardet, humanize, python-slugify)
 
 **Go Modules:**
 - **go-sqlite-parser**: Parses SQLite databases using pure Go SQLite library
@@ -419,31 +429,68 @@ See [examples/sqlite-parser/README.md](examples/sqlite-parser/README.md) for det
 
 **Python Modules** (CPython 3.13.7):
 
+Python modules use a standard `pyproject.toml` structure with pure-Python dependencies:
+
+```
+examples/python-counter/
+├── pyproject.toml
+└── src/
+    └── python_counter/
+        └── __init__.py   # contains main() entry point
+```
+
+**pyproject.toml format:**
+```toml
+[project]
+name = "python-counter"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["chardet", "humanize"]  # pure-Python only
+
+[tool.wadup]
+entry-point = "python_counter"  # module with main() function
+```
+
+**Building Python modules:**
+
 First, build the shared Python WASI runtime (one-time, ~5-10 minutes):
 ```bash
 ./scripts/build-python-wasi.sh
 ```
 
-Then build individual Python modules:
+Then build individual Python modules using `build-python-project.sh`:
 ```bash
-cd examples/python-sqlite-parser
-make
+./scripts/build-python-project.sh examples/python-counter
+./scripts/build-python-project.sh examples/python-sqlite-parser
+./scripts/build-python-project.sh examples/python-multi-file
+```
 
-cd ../python-counter
+Or use Make:
+```bash
+cd examples/python-counter
 make
 ```
+
+The build script:
+1. Parses `pyproject.toml` for dependencies and entry point
+2. Downloads pure-Python dependencies via `pip download --no-binary :all:`
+3. Bundles project source, dependencies, and `wadup` library into a ZIP
+4. Embeds the ZIP into a C file and compiles with CPython
+
+**Third-party dependencies:**
+- Only pure-Python packages are supported (no C extensions)
+- Transitive dependencies are automatically resolved
+- Dependencies are bundled into the WASM module
 
 The shared Python WASI build (`build/python-wasi/`) includes:
 - CPython 3.13.7 compiled for wasm32-wasip1
 - SQLite 3.45.1 for WASI
-- Frozen Python standard library
-- All dependencies (~45MB)
+- Frozen Python standard library (including logging, importlib, gettext, etc.)
+- Compression libraries (zlib, bz2, lzma)
 
-All Python modules link against this shared build, avoiding duplication.
+**Important**: The Python interpreter is initialized once per worker thread and reused across all files. Python global variables persist between files processed by the same thread. The module's `main()` function should be idempotent or explicitly reset state as needed.
 
-**Important**: The Python interpreter is initialized once per worker thread and reused across all files. Python global variables persist between files processed by the same thread. The module's `process()` function should be idempotent or explicitly reset state as needed.
-
-See [examples/python-sqlite-parser/README.md](examples/python-sqlite-parser/README.md) for complete documentation, architecture details, and troubleshooting.
+See [examples/python-sqlite-parser/README.md](examples/python-sqlite-parser/README.md) for complete documentation.
 
 **Go Modules** (Standard Go 1.21+):
 
