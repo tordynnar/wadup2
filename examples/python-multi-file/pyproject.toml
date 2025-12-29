@@ -2,7 +2,7 @@
 name = "python-multi-file"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["chardet"]
+dependencies = ["chardet", "humanize", "python-slugify"]
 
 [tool.wadup]
 entry-point = "python_multi_file"

@@ -2,11 +2,12 @@
 
 This example demonstrates:
 1. Multiple Python source files in a project
-2. Using a pure-Python dependency (chardet)
+2. Using pure-Python dependencies (chardet, humanize, python-slugify)
 3. Importing between module files
 
 The module analyzes files and detects their encoding using the
-chardet library.
+chardet library, formats sizes with humanize, and creates slugs
+with python-slugify.
 """
 import wadup
 from .analyzer import analyze_content
@@ -27,9 +28,11 @@ def main():
         ("line_count", "Int64"),
         ("word_count", "Int64"),
         ("char_count", "Int64"),
+        ("human_size", "String"),
         ("encoding", "String"),
         ("encoding_confidence", "Float64"),
         ("encoding_language", "String"),
+        ("encoding_slug", "String"),
     ])
 
     # Insert the analysis results
@@ -39,9 +42,11 @@ def main():
         d['line_count'],
         d['word_count'],
         d['char_count'],
+        d['human_size'],
         d['encoding'],
         d['encoding_confidence'],
         d['encoding_language'],
+        d['encoding_slug'],
     ])
 
     # Flush metadata

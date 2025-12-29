@@ -2,9 +2,11 @@
 
 This module demonstrates:
 1. Code separation across multiple files
-2. Using a pure-Python dependency (chardet)
+2. Using pure-Python dependencies (chardet, humanize, python-slugify)
 """
 import chardet
+import humanize
+from slugify import slugify
 from .models import FileStats, EncodingInfo, FileAnalysis
 
 
@@ -33,6 +35,9 @@ def compute_stats(data: bytes) -> FileStats:
     """
     total_bytes = len(data)
 
+    # Use humanize to format file size (e.g., "1.5 KB")
+    human_size = humanize.naturalsize(total_bytes, binary=True)
+
     # Count lines (handle both Unix and Windows line endings)
     line_count = data.count(b'\n')
     if data and not data.endswith(b'\n'):
@@ -53,6 +58,7 @@ def compute_stats(data: bytes) -> FileStats:
         line_count=line_count,
         word_count=word_count,
         char_count=char_count,
+        human_size=human_size,
     )
 
 
@@ -70,13 +76,19 @@ def detect_encoding(data: bytes) -> EncodingInfo:
             encoding="empty",
             confidence=1.0,
             language="",
+            encoding_slug="empty",
         )
 
     # Use chardet to detect encoding
     result = chardet.detect(data)
+    encoding = result.get('encoding') or "unknown"
+
+    # Use python-slugify to create a URL-safe slug from the encoding name
+    encoding_slug = slugify(encoding)
 
     return EncodingInfo(
-        encoding=result.get('encoding'),
+        encoding=encoding,
         confidence=result.get('confidence', 0.0),
         language=result.get('language', ''),
+        encoding_slug=encoding_slug,
     )

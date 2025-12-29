@@ -817,8 +817,9 @@ fn test_csharp_json_analyzer() {
 fn test_python_multi_file() {
     // This test verifies:
     // 1. Multiple Python source files in a project work correctly
-    // 2. Pure-Python dependencies (chardet) are bundled and importable
+    // 2. Pure-Python dependencies (chardet, humanize, python-slugify) are bundled and importable
     // 3. Cross-module imports work within the project
+    // 4. Transitive dependencies are resolved correctly
 
     // Build the CLI
     let status = Command::new("cargo")
@@ -874,15 +875,15 @@ fn test_python_multi_file() {
     ).unwrap() > 0;
     assert!(table_exists, "file_analysis table not created");
 
-    // Get all analysis results
-    let results: Vec<(i64, i64, i64, i64, String, f64)> = conn.prepare(
-        "SELECT total_bytes, line_count, word_count, char_count, encoding, encoding_confidence \
+    // Get all analysis results (including new fields from humanize and python-slugify)
+    let results: Vec<(i64, i64, i64, i64, String, String, f64, String)> = conn.prepare(
+        "SELECT total_bytes, line_count, word_count, char_count, human_size, encoding, encoding_confidence, encoding_slug \
          FROM file_analysis"
     ).unwrap()
     .query_map([], |row| {
         Ok((
             row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
-            row.get(4)?, row.get(5)?
+            row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?
         ))
     })
     .unwrap()
@@ -894,29 +895,37 @@ fn test_python_multi_file() {
 
     // Find the text file analysis
     let text_analysis = results.iter()
-        .find(|(total_bytes, _, _, _, _, _)| *total_bytes == text_content.len() as i64);
+        .find(|(total_bytes, _, _, _, _, _, _, _)| *total_bytes == text_content.len() as i64);
     assert!(text_analysis.is_some(), "Text file analysis not found");
 
-    let (total_bytes, line_count, word_count, char_count, encoding, confidence) = text_analysis.unwrap();
+    let (total_bytes, line_count, word_count, char_count, human_size, encoding, confidence, encoding_slug) = text_analysis.unwrap();
     assert_eq!(*total_bytes, text_content.len() as i64, "Text file total_bytes mismatch");
     assert_eq!(*line_count, 3, "Text file line_count mismatch");
     assert_eq!(*word_count, 10, "Text file word_count mismatch");
     assert_eq!(*char_count, text_content.len() as i64, "Text file char_count mismatch");
+    // humanize should format the file size (e.g., "52 Bytes")
+    assert!(!human_size.is_empty(), "Text file human_size should not be empty");
+    assert!(human_size.contains("Bytes"), "Text file human_size should contain 'Bytes', got: {}", human_size);
     // chardet should detect ASCII or UTF-8 for plain text
     assert!(!encoding.is_empty(), "Text file encoding should be detected");
     assert!(*confidence > 0.0, "Text file encoding confidence should be > 0");
+    // python-slugify should create a slug from the encoding
+    assert!(!encoding_slug.is_empty(), "Text file encoding_slug should not be empty");
 
     // Find the binary file analysis (256 bytes)
     let binary_analysis = results.iter()
-        .find(|(total_bytes, _, _, _, _, _)| *total_bytes == 256);
+        .find(|(total_bytes, _, _, _, _, _, _, _)| *total_bytes == 256);
     assert!(binary_analysis.is_some(), "Binary file analysis not found");
 
-    let (total_bytes, _, _, _, _, _) = binary_analysis.unwrap();
+    let (total_bytes, _, _, _, human_size, _, _, _) = binary_analysis.unwrap();
     assert_eq!(*total_bytes, 256, "Binary file total_bytes mismatch");
+    assert!(!human_size.is_empty(), "Binary file human_size should not be empty");
 
     println!("✓ Python multi-file module verified:");
     println!("  - Multiple source files imported correctly");
     println!("  - chardet dependency bundled and working");
+    println!("  - humanize dependency bundled and working (size: {})", human_size);
+    println!("  - python-slugify dependency bundled and working (slug: {})", encoding_slug);
     println!("  - Text file encoding detected: {} (confidence: {})", encoding, confidence);
     println!("  - File analysis results correct for both text and binary files");
 }

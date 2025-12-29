@@ -36,6 +36,7 @@ if [ "$#" -lt 1 ]; then
 fi
 
 PROJECT_DIR="$(cd "$1" && pwd)"
+export PROJECT_DIR
 
 # Detect workspace root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -87,10 +88,10 @@ if not entry_point:
     print("ERROR: [tool.wadup].entry-point not found in pyproject.toml", file=sys.stderr)
     sys.exit(1)
 
-# Output as shell-parseable format
-print(f"PROJECT_NAME={name}")
-print(f"ENTRY_MODULE={entry_point}")
-print(f"DEPENDENCIES={' '.join(dependencies)}")
+# Output as shell-parseable format (quote values for shell safety)
+print(f"PROJECT_NAME='{name}'")
+print(f"ENTRY_MODULE='{entry_point}'")
+print(f"DEPENDENCIES='{' '.join(dependencies)}'")
 PYEOF
 )
 
@@ -190,13 +191,13 @@ if [ -n "$DEPENDENCIES" ]; then
     mkdir -p "$DEPS_TEMP"
 
     # Download all dependencies at once, letting pip resolve the full dependency tree
+    # Only pure-Python packages (source distributions) are supported
     print_info "  Dependencies: $DEPENDENCIES"
     pip download --no-binary :all: -d "$DEPS_TEMP" $DEPENDENCIES 2>/dev/null || {
-        print_warning "  Failed to download as pure Python, trying with binaries..."
-        pip download -d "$DEPS_TEMP" $DEPENDENCIES 2>/dev/null || {
-            print_error "  Failed to download dependencies"
-            exit 1
-        }
+        print_error "  Failed to download dependencies as source distributions"
+        print_error "  Only pure-Python packages are supported (no C extensions)"
+        print_error "  Check that all dependencies have sdist packages available on PyPI"
+        exit 1
     }
 
     # Extract dependencies

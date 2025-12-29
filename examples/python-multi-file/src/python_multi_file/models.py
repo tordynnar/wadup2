@@ -7,20 +7,22 @@ This module demonstrates multiple files in a project.
 class FileStats:
     """Statistics about a file."""
 
-    def __init__(self, total_bytes, line_count, word_count, char_count):
+    def __init__(self, total_bytes, line_count, word_count, char_count, human_size):
         self.total_bytes = total_bytes
         self.line_count = line_count
         self.word_count = word_count
         self.char_count = char_count
+        self.human_size = human_size
 
 
 class EncodingInfo:
     """Encoding detection information from chardet."""
 
-    def __init__(self, encoding, confidence, language):
+    def __init__(self, encoding, confidence, language, encoding_slug):
         self.encoding = encoding or "unknown"
         self.confidence = confidence or 0.0
         self.language = language or ""
+        self.encoding_slug = encoding_slug or "unknown"
 
 
 class FileAnalysis:
@@ -37,7 +39,9 @@ class FileAnalysis:
             'line_count': self.stats.line_count,
             'word_count': self.stats.word_count,
             'char_count': self.stats.char_count,
+            'human_size': self.stats.human_size,
             'encoding': self.encoding_info.encoding,
             'encoding_confidence': self.encoding_info.confidence,
             'encoding_language': self.encoding_info.language,
+            'encoding_slug': self.encoding_info.encoding_slug,
         }
