@@ -127,6 +127,16 @@ if [ -f "$CONFIG_H" ]; then
     cp /tmp/config_patched.h "$CONFIG_H"
 fi
 
+# Replace _numpyconfig.h with WASI-specific version
+# The native build generates values for arm64 (NPY_SIZEOF_LONG=8, etc.)
+# but WASI needs 32-bit values (NPY_SIZEOF_LONG=4, etc.)
+echo "Replacing _numpyconfig.h with WASI-compatible version..."
+NUMPYCONFIG_H="$NATIVE_BUILD/numpy/_core/_numpyconfig.h"
+if [ -f "$NUMPYCONFIG_H" ] && [ -f "$DEPS_DIR/wasi-stubs/numpy/_numpyconfig.h" ]; then
+    cp "$DEPS_DIR/wasi-stubs/numpy/_numpyconfig.h" "$NUMPYCONFIG_H"
+    echo "  Replaced _numpyconfig.h with WASI values (NPY_SIZEOF_LONG=4, etc.)"
+fi
+
 # Key directories
 CORE_SRC="$NUMPY_SRC/numpy/_core/src"
 CORE_INCLUDE="$NUMPY_SRC/numpy/_core/include"
