@@ -2,9 +2,25 @@
  * Stub half-float implementations for WASI 32-bit environment.
  * NumPy's halffloat.cpp uses 64-bit assumptions that don't work on WASI.
  * These stubs provide basic implementations using float intermediates.
+ *
+ * This file is self-contained and doesn't require numpy headers.
  */
 
-#include "numpy/halffloat.h"
+#include <stdint.h>
+
+/* NumPy type definitions */
+typedef uint16_t npy_half;
+typedef uint16_t npy_uint16;
+typedef uint32_t npy_uint32;
+typedef int32_t npy_int32;
+typedef uint64_t npy_uint64;
+
+/* Half-float special values */
+#define NPY_HALF_NAN     ((npy_half)0x7E00)
+#define NPY_HALF_PINF    ((npy_half)0x7C00)
+#define NPY_HALF_NINF    ((npy_half)0xFC00)
+#define NPY_HALF_PZERO   ((npy_half)0x0000)
+#define NPY_HALF_NZERO   ((npy_half)0x8000)
 
 /* Simple half-float implementation using IEEE 754 bit manipulation */
 npy_half npy_float_to_half(float f) {

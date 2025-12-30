@@ -105,15 +105,16 @@ Updated `extensions/__init__.py`:
 - Libraries are created (`libnumpy_core.a`, `libnpymath.a`)
 - Python patches prevent circular import issues
 - WASM module builds successfully (41.8MB)
+- Long double formatting issue fixed with `-lc-printscan-long-double`
+- Trig function signature mismatch fixed (only cos/sin stubs needed)
 
 ### Not Working
-The module crashes at runtime with:
-```
-Support for formatting long double values is currently disabled.
-To enable it, add -lc-printscan-long-double to the link command.
-```
+The module crashes at runtime during NumPy initialization with a WASM trap. This happens before Python's import machinery completes, suggesting an issue in the C extension initialization code.
 
-This is followed by a WASM trap, indicating a crash in a C function trying to format a long double value.
+Possible causes:
+- Missing or incorrect NumPy internal configuration during init
+- Issues with the frozen Python stdlib modules
+- Problems with how PyImport_AppendInittab registers the module
 
 ## Lessons Learned
 
@@ -143,13 +144,21 @@ This is followed by a WASM trap, indicating a crash in a C function trying to fo
 ### 6. Long Double Formatting
 - WASI libc doesn't support formatting long double by default
 - NumPy uses long double in some places
-- Potential solution: Add `-lc-printscan-long-double` to linker flags
+- Solution: Add `-lc-printscan-long-double` to linker flags when numpy is used
+
+### 7. Ufunc Loop Function Signatures
+- NumPy's FLOAT_cos, DOUBLE_sin etc. are NOT simple scalar wrappers
+- They are strided loop functions with signature: `void FUNC(char**, npy_intp const*, npy_intp const*, void*)`
+- Most are already defined in `libnumpy_core.a` (loops_*.dispatch.o)
+- Only `FLOAT_cos`, `DOUBLE_cos`, `FLOAT_sin`, `DOUBLE_sin` need stubs
+- Providing stubs for already-defined functions causes duplicate symbol errors
 
 ## Next Steps
 
-1. **Fix long double crash**
-   - Add `-lc-printscan-long-double` to linker flags
-   - Or find and stub the code paths using long double printing
+1. **Debug initialization crash**
+   - The module crashes during `numpy._core._multiarray_umath` init
+   - Need to add debug prints or use a debugger to find crash location
+   - Compare with Pyodide's numpy patches for initialization
 
 2. **Test basic operations**
    - Once import succeeds, verify array creation, basic math, sum/mean/etc.

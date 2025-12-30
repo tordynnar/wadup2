@@ -478,6 +478,10 @@ def main() -> int:
             "-lm",
             *ldflags
         ]
+
+        # NumPy uses long double formatting which requires extra libc support
+        if "numpy" in c_extensions:
+            link_cmd.append("-lc-printscan-long-double")
         result = subprocess.run(link_cmd, cwd=build_dir)
         if result.returncode != 0:
             print_error("Linking failed")

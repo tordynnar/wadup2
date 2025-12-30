@@ -53,10 +53,11 @@ for tool in ninja cython; do
 done
 
 # Check if already built with substantial content
-if [ -f "$DEPS_DIR/wasi-numpy/lib/libnumpy_core.a" ]; then
+if [ -f "$DEPS_DIR/wasi-numpy/lib/libnumpy_core.a" ] && [ -f "$DEPS_DIR/wasi-numpy/lib/libnpymath.a" ]; then
     size=$(wc -c < "$DEPS_DIR/wasi-numpy/lib/libnumpy_core.a" | tr -d ' ')
-    if [ "$size" -gt 100000 ]; then
-        echo "NumPy already built (libnumpy_core.a is ${size} bytes)"
+    npymath_size=$(wc -c < "$DEPS_DIR/wasi-numpy/lib/libnpymath.a" | tr -d ' ')
+    if [ "$size" -gt 100000 ] && [ "$npymath_size" -gt 0 ]; then
+        echo "NumPy already built (libnumpy_core.a is ${size} bytes, libnpymath.a is ${npymath_size} bytes)"
         exit 0
     fi
 fi
@@ -236,7 +237,8 @@ if [ -f "$DEPS_DIR/wasi-stubs/halffloat_stubs.c" ]; then
 fi
 
 # Compile NumPy trig stubs (FLOAT_cos, DOUBLE_sin, etc.)
-# NumPy's generated dispatch code uses uppercase FLOAT_/DOUBLE_ prefixed names
+# These are strided loop implementations with correct signatures:
+#   void FUNC(char **args, npy_intp const *dimensions, npy_intp const *steps, void *data)
 if [ -f "$DEPS_DIR/wasi-stubs/numpy_trig_stubs.c" ]; then
     echo "  Compiling numpy trig stubs..."
     compile_file "$DEPS_DIR/wasi-stubs/numpy_trig_stubs.c" || true
