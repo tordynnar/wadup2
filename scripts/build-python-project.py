@@ -10,6 +10,7 @@ The project directory must contain:
   - src/<module_name>/__init__.py entry point
 
 Dependencies listed in pyproject.toml are bundled if they are pure Python.
+C extensions (lxml, numpy, pandas) can be enabled via [tool.wadup].c-extensions.
 """
 
 import argparse
@@ -22,6 +23,17 @@ import tarfile
 import tempfile
 import zipfile
 from pathlib import Path
+
+# Add parent directory to path so we can import extensions registry
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from extensions import (
+    EXTENSIONS,
+    get_all_extensions,
+    get_all_modules,
+    get_all_libraries,
+    get_all_python_dirs,
+    get_validation_files,
+)
 
 # Try tomllib (Python 3.11+), fall back to tomli
 try:
@@ -166,6 +178,42 @@ def extract_wheel(wheel_path: Path, bundle_dir: Path, temp_dir: Path) -> None:
     shutil.rmtree(wheel_extract)
 
 
+def generate_main_bundled_c(c_extensions: list[str], template_path: Path, output_path: Path) -> None:
+    """Generate main_bundled.c from template with extension registrations."""
+    with open(template_path, 'r') as f:
+        template = f.read()
+
+    if not c_extensions:
+        # No extensions - empty placeholders
+        extern_declarations = ""
+        register_extensions = ""
+    else:
+        # Get all modules to register (resolves dependencies)
+        modules = get_all_modules(c_extensions)
+
+        # Generate extern declarations
+        extern_lines = []
+        for module_name, init_func in modules:
+            extern_lines.append(f"extern PyObject* {init_func}(void);")
+        extern_declarations = "\n".join(extern_lines)
+
+        # Generate registration code
+        register_lines = []
+        for module_name, init_func in modules:
+            register_lines.append(f'    if (PyImport_AppendInittab("{module_name}", {init_func}) == -1) {{')
+            register_lines.append(f'        fprintf(stderr, "Failed to register {module_name}\\n");')
+            register_lines.append('        return 1;')
+            register_lines.append('    }')
+        register_extensions = "\n".join(register_lines)
+
+    # Replace placeholders
+    output = template.replace("// {{EXTERN_DECLARATIONS}}", extern_declarations)
+    output = output.replace("// {{REGISTER_EXTENSIONS}}", register_extensions)
+
+    with open(output_path, 'w') as f:
+        f.write(output)
+
+
 def generate_bundle_header(bundle_zip: Path, entry_module: str, output_path: Path) -> int:
     """Generate bundle.h with embedded zip data. Returns bundle size."""
     with open(bundle_zip, 'rb') as f:
@@ -260,17 +308,16 @@ def main() -> int:
         print_error("zlib not found. Run ./scripts/download-deps.sh first")
         return 1
 
-    # Validate C extensions
-    if 'lxml' in c_extensions:
-        if not (deps_dir / "wasi-lxml" / "lib" / "liblxml_etree.a").exists():
-            print_error("lxml not built. Run ./scripts/build-lxml-wasi.sh first")
-            return 1
-        if not (deps_dir / "wasi-libxml2" / "lib" / "libxml2.a").exists():
-            print_error("libxml2 not found. Run ./scripts/download-deps.sh first")
-            return 1
-        if not (deps_dir / "wasi-libxslt" / "lib" / "libxslt.a").exists():
-            print_error("libxslt not found. Run ./scripts/download-deps.sh first")
-            return 1
+    # Validate C extensions using registry
+    if c_extensions:
+        validation_files = get_validation_files(c_extensions)
+        for ext_name, files in validation_files.items():
+            for validation_file in files:
+                full_path = deps_dir / validation_file
+                if not full_path.exists():
+                    print_error(f"{ext_name} not built: {validation_file} not found")
+                    print_error(f"Run ./scripts/build-{ext_name}-wasi.sh first")
+                    return 1
 
     # Validate source directory
     source_dir = project_dir / "src" / entry_module
@@ -304,11 +351,16 @@ def main() -> int:
         print_info("Bundling project source...")
         shutil.copytree(source_dir, bundle_dir / entry_module)
 
-        # Bundle C extension Python files
-        if 'lxml' in c_extensions:
-            print_info("Bundling lxml Python files...")
-            lxml_python_dir = deps_dir / "wasi-lxml" / "python" / "lxml"
-            shutil.copytree(lxml_python_dir, bundle_dir / "lxml")
+        # Bundle C extension Python files using registry
+        if c_extensions:
+            ext_python_dirs = get_all_python_dirs(c_extensions)
+            for ext_python_dir in ext_python_dirs:
+                # ext_python_dir is like "wasi-lxml/python/lxml"
+                # We need to copy to bundle_dir using just the package name (last component)
+                src_path = deps_dir / ext_python_dir
+                pkg_name = src_path.name
+                print_info(f"Bundling {pkg_name} Python files...")
+                shutil.copytree(src_path, bundle_dir / pkg_name)
 
         # Handle dependencies (if any)
         if dependencies:
@@ -380,14 +432,10 @@ def main() -> int:
         ]
         wasi_emu_libs = wasi_sysroot / "lib" / "wasm32-wasip1"
 
-        # Copy main_bundled.c to build directory
-        # Use lxml variant if lxml C extension is requested
-        if 'lxml' in c_extensions:
-            main_c_src = wadup_root / "python-wadup-guest" / "src" / "main_bundled_lxml.c"
-        else:
-            main_c_src = wadup_root / "python-wadup-guest" / "src" / "main_bundled.c"
+        # Generate main_bundled.c from template with extension registrations
+        main_c_template = wadup_root / "python-wadup-guest" / "src" / "main_bundled_template.c"
         main_c_dst = build_dir / "main_bundled.c"
-        shutil.copy(main_c_src, main_c_dst)
+        generate_main_bundled_c(c_extensions, main_c_template, main_c_dst)
 
         # Compile object file
         compile_cmd = [str(cc)] + cflags + ["-c", str(main_c_dst), "-o", str(build_dir / "main_bundled.o")]
@@ -399,15 +447,14 @@ def main() -> int:
         # Find Hacl library files
         hacl_libs = list((python_dir / "lib").glob("libHacl_*.a"))
 
-        # Build list of lxml libraries if needed
-        lxml_libs = []
-        if 'lxml' in c_extensions:
-            lxml_libs = [
-                str(deps_dir / "wasi-lxml" / "lib" / "liblxml_etree.a"),
-                str(deps_dir / "wasi-libxslt" / "lib" / "libexslt.a"),
-                str(deps_dir / "wasi-libxslt" / "lib" / "libxslt.a"),
-                str(deps_dir / "wasi-libxml2" / "lib" / "libxml2.a"),
-            ]
+        # Build list of C extension libraries using registry
+        ext_libs = []
+        if c_extensions:
+            ext_lib_paths = get_all_libraries(c_extensions)
+            for lib_path in ext_lib_paths:
+                full_path = deps_dir / lib_path
+                if full_path.exists():
+                    ext_libs.append(str(full_path))
 
         print_info("Linking...")
         link_cmd = [
@@ -421,7 +468,7 @@ def main() -> int:
             str(python_dir / "lib" / "libexpat.a"),
             str(python_dir / "lib" / "libsqlite3.a"),
             *[str(lib) for lib in hacl_libs],
-            *lxml_libs,  # lxml and its dependencies (libxslt, libxml2)
+            *ext_libs,  # C extension libraries (lxml, numpy, pandas, etc.)
             str(deps_dir / "wasi-zlib" / "lib" / "libz.a"),
             str(deps_dir / "wasi-bzip2" / "lib" / "libbz2.a"),
             str(deps_dir / "wasi-xz" / "lib" / "liblzma.a"),
