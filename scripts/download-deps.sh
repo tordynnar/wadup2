@@ -29,6 +29,8 @@ BZIP2_VERSION="1.0.8"
 XZ_VERSION="5.8.2"
 SQLITE_VERSION="3510100"
 SQLITE_YEAR="2025"
+LIBXML2_VERSION="2.13.5"
+LIBXSLT_VERSION="1.1.42"
 
 # Create deps directory
 mkdir -p "$DEPS_DIR"
@@ -229,6 +231,126 @@ else
     echo "  Built successfully"
 fi
 
+# Build libxml2 for WASI (optional - for lxml support)
+echo ""
+echo "6. libxml2 ${LIBXML2_VERSION} (optional - for lxml)"
+if [ -f "$DEPS_DIR/wasi-libxml2/lib/libxml2.a" ]; then
+    echo "  Already built"
+else
+    download "https://download.gnome.org/sources/libxml2/2.13/libxml2-${LIBXML2_VERSION}.tar.xz" "$DEPS_DIR/libxml2-${LIBXML2_VERSION}.tar.xz"
+    echo "  Building (this may take a few minutes)..."
+
+    cd "$DEPS_DIR"
+    rm -rf "libxml2-${LIBXML2_VERSION}"
+    tar xJf "libxml2-${LIBXML2_VERSION}.tar.xz"
+    cd "libxml2-${LIBXML2_VERSION}"
+
+    # Patch xmlIO.c to work around missing dup() in WASI
+    # The dup() call is used for stdout output which we don't need
+    python3 -c '
+import sys
+with open("xmlIO.c", "r") as f:
+    content = f.read()
+
+old_code = """    if (!strcmp(filename, "-")) {
+        fd = dup(STDOUT_FILENO);
+
+        if (fd < 0)
+            return(xmlIOErr(0, "dup()"));
+    }"""
+
+new_code = """    if (!strcmp(filename, "-")) {
+#ifdef __wasi__
+        return(xmlIOErr(0, "stdout not supported in WASI"));
+#else
+        fd = dup(STDOUT_FILENO);
+
+        if (fd < 0)
+            return(xmlIOErr(0, "dup()"));
+#endif
+    }"""
+
+if old_code in content:
+    content = content.replace(old_code, new_code)
+    with open("xmlIO.c", "w") as f:
+        f.write(content)
+    print("  Patched xmlIO.c for WASI compatibility")
+'
+
+    # Configure for WASI - disable most optional features
+    CC="$WASI_SDK_PATH/bin/clang" \
+    AR="$WASI_SDK_PATH/bin/ar" \
+    RANLIB="$WASI_SDK_PATH/bin/ranlib" \
+    CFLAGS="-O2 -I$DEPS_DIR/wasi-zlib/include" \
+    LDFLAGS="-L$DEPS_DIR/wasi-zlib/lib" \
+    ./configure \
+        --host=wasm32-wasi \
+        --prefix="$DEPS_DIR/wasi-libxml2" \
+        --disable-shared \
+        --enable-static \
+        --without-http \
+        --without-ftp \
+        --without-threads \
+        --without-thread-alloc \
+        --without-modules \
+        --without-python \
+        --without-iconv \
+        --without-icu \
+        --without-readline \
+        --without-history \
+        --without-debug \
+        --without-legacy \
+        --with-zlib="$DEPS_DIR/wasi-zlib" \
+        > /dev/null 2>&1
+
+    make -j $(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) > /dev/null 2>&1
+    make install > /dev/null 2>&1
+
+    cd "$DEPS_DIR"
+    rm -rf "libxml2-${LIBXML2_VERSION}"
+    echo "  Built successfully"
+fi
+
+# Build libxslt for WASI (optional - for lxml support)
+echo ""
+echo "7. libxslt ${LIBXSLT_VERSION} (optional - for lxml)"
+if [ -f "$DEPS_DIR/wasi-libxslt/lib/libxslt.a" ]; then
+    echo "  Already built"
+else
+    download "https://download.gnome.org/sources/libxslt/1.1/libxslt-${LIBXSLT_VERSION}.tar.xz" "$DEPS_DIR/libxslt-${LIBXSLT_VERSION}.tar.xz"
+    echo "  Building (this may take a few minutes)..."
+
+    cd "$DEPS_DIR"
+    rm -rf "libxslt-${LIBXSLT_VERSION}"
+    tar xJf "libxslt-${LIBXSLT_VERSION}.tar.xz"
+    cd "libxslt-${LIBXSLT_VERSION}"
+
+    # Configure for WASI - disable most optional features
+    CC="$WASI_SDK_PATH/bin/clang" \
+    AR="$WASI_SDK_PATH/bin/ar" \
+    RANLIB="$WASI_SDK_PATH/bin/ranlib" \
+    CFLAGS="-O2 -I$DEPS_DIR/wasi-libxml2/include/libxml2" \
+    LDFLAGS="-L$DEPS_DIR/wasi-libxml2/lib" \
+    ./configure \
+        --host=wasm32-wasi \
+        --prefix="$DEPS_DIR/wasi-libxslt" \
+        --disable-shared \
+        --enable-static \
+        --without-python \
+        --without-crypto \
+        --without-plugins \
+        --without-debug \
+        --with-libxml-prefix="$DEPS_DIR/wasi-libxml2" \
+        > /dev/null 2>&1
+
+    make -j $(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) > /dev/null 2>&1
+    make install > /dev/null 2>&1
+
+    cd "$DEPS_DIR"
+    rm -rf "libxslt-${LIBXSLT_VERSION}"
+    echo "  Built successfully"
+fi
+
 echo ""
 echo "=== All dependencies ready ==="
 echo ""
@@ -237,3 +359,5 @@ echo "zlib:     $DEPS_DIR/wasi-zlib"
 echo "bzip2:    $DEPS_DIR/wasi-bzip2"
 echo "liblzma:  $DEPS_DIR/wasi-xz"
 echo "SQLite:   $DEPS_DIR/wasi-sqlite"
+echo "libxml2:  $DEPS_DIR/wasi-libxml2"
+echo "libxslt:  $DEPS_DIR/wasi-libxslt"

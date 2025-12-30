@@ -59,8 +59,8 @@ def print_error(msg: str) -> None:
     print(f"{Colors.RED}✗{Colors.NC} {msg}")
 
 
-def parse_pyproject(project_dir: Path) -> tuple[str, str, list[str]]:
-    """Parse pyproject.toml and return (name, entry_point, dependencies)."""
+def parse_pyproject(project_dir: Path) -> tuple[str, str, list[str], list[str]]:
+    """Parse pyproject.toml and return (name, entry_point, dependencies, c_extensions)."""
     pyproject_path = project_dir / "pyproject.toml"
 
     with open(pyproject_path, 'rb') as f:
@@ -72,6 +72,7 @@ def parse_pyproject(project_dir: Path) -> tuple[str, str, list[str]]:
     name = project.get('name', '')
     entry_point = wadup.get('entry-point', '')
     dependencies = project.get('dependencies', [])
+    c_extensions = wadup.get('c-extensions', [])
 
     if not name:
         print_error("[project].name not found in pyproject.toml")
@@ -81,7 +82,7 @@ def parse_pyproject(project_dir: Path) -> tuple[str, str, list[str]]:
         print_error("[tool.wadup].entry-point not found in pyproject.toml")
         sys.exit(1)
 
-    return name, entry_point, dependencies
+    return name, entry_point, dependencies, c_extensions
 
 
 def download_dependencies(dependencies: list[str], deps_dir: Path) -> None:
@@ -212,12 +213,14 @@ def main() -> int:
 
     # Parse pyproject.toml
     print_info("Parsing pyproject.toml...")
-    project_name, entry_module, dependencies = parse_pyproject(project_dir)
+    project_name, entry_module, dependencies, c_extensions = parse_pyproject(project_dir)
 
     print_success(f"Project: {project_name}")
     print_success(f"Entry point: {entry_module}")
     if dependencies:
         print_success(f"Dependencies: {' '.join(dependencies)}")
+    if c_extensions:
+        print_success(f"C extensions: {' '.join(c_extensions)}")
     print()
 
     # Convert project name to WASM filename (hyphens to underscores)
@@ -257,6 +260,18 @@ def main() -> int:
         print_error("zlib not found. Run ./scripts/download-deps.sh first")
         return 1
 
+    # Validate C extensions
+    if 'lxml' in c_extensions:
+        if not (deps_dir / "wasi-lxml" / "lib" / "liblxml_etree.a").exists():
+            print_error("lxml not built. Run ./scripts/build-lxml-wasi.sh first")
+            return 1
+        if not (deps_dir / "wasi-libxml2" / "lib" / "libxml2.a").exists():
+            print_error("libxml2 not found. Run ./scripts/download-deps.sh first")
+            return 1
+        if not (deps_dir / "wasi-libxslt" / "lib" / "libxslt.a").exists():
+            print_error("libxslt not found. Run ./scripts/download-deps.sh first")
+            return 1
+
     # Validate source directory
     source_dir = project_dir / "src" / entry_module
     if not source_dir.is_dir():
@@ -288,6 +303,12 @@ def main() -> int:
         # Copy project source
         print_info("Bundling project source...")
         shutil.copytree(source_dir, bundle_dir / entry_module)
+
+        # Bundle C extension Python files
+        if 'lxml' in c_extensions:
+            print_info("Bundling lxml Python files...")
+            lxml_python_dir = deps_dir / "wasi-lxml" / "python" / "lxml"
+            shutil.copytree(lxml_python_dir, bundle_dir / "lxml")
 
         # Handle dependencies (if any)
         if dependencies:
@@ -360,7 +381,11 @@ def main() -> int:
         wasi_emu_libs = wasi_sysroot / "lib" / "wasm32-wasip1"
 
         # Copy main_bundled.c to build directory
-        main_c_src = wadup_root / "python-wadup-guest" / "src" / "main_bundled.c"
+        # Use lxml variant if lxml C extension is requested
+        if 'lxml' in c_extensions:
+            main_c_src = wadup_root / "python-wadup-guest" / "src" / "main_bundled_lxml.c"
+        else:
+            main_c_src = wadup_root / "python-wadup-guest" / "src" / "main_bundled.c"
         main_c_dst = build_dir / "main_bundled.c"
         shutil.copy(main_c_src, main_c_dst)
 
@@ -374,6 +399,16 @@ def main() -> int:
         # Find Hacl library files
         hacl_libs = list((python_dir / "lib").glob("libHacl_*.a"))
 
+        # Build list of lxml libraries if needed
+        lxml_libs = []
+        if 'lxml' in c_extensions:
+            lxml_libs = [
+                str(deps_dir / "wasi-lxml" / "lib" / "liblxml_etree.a"),
+                str(deps_dir / "wasi-libxslt" / "lib" / "libexslt.a"),
+                str(deps_dir / "wasi-libxslt" / "lib" / "libxslt.a"),
+                str(deps_dir / "wasi-libxml2" / "lib" / "libxml2.a"),
+            ]
+
         print_info("Linking...")
         link_cmd = [
             str(cc),
@@ -386,6 +421,7 @@ def main() -> int:
             str(python_dir / "lib" / "libexpat.a"),
             str(python_dir / "lib" / "libsqlite3.a"),
             *[str(lib) for lib in hacl_libs],
+            *lxml_libs,  # lxml and its dependencies (libxslt, libxml2)
             str(deps_dir / "wasi-zlib" / "lib" / "libz.a"),
             str(deps_dir / "wasi-bzip2" / "lib" / "libbz2.a"),
             str(deps_dir / "wasi-xz" / "lib" / "liblzma.a"),

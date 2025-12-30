@@ -1,0 +1,9 @@
+[project]
+name = "python-lxml-test"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.wadup]
+entry-point = "python_lxml_test"
+c-extensions = ["lxml"]
