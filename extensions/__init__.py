@@ -32,27 +32,13 @@ EXTENSIONS = {
 
     "numpy": {
         "modules": [
-            # Core array module (essential)
+            # Core array module - the main multiarray_umath extension
             ("numpy._core._multiarray_umath", "PyInit__multiarray_umath"),
-            # Random number generation (core modules only)
-            ("numpy.random._common", "PyInit__common"),
-            ("numpy.random.bit_generator", "PyInit_bit_generator"),
-            ("numpy.random._bounded_integers", "PyInit__bounded_integers"),
-            ("numpy.random._mt19937", "PyInit__mt19937"),
-            ("numpy.random._generator", "PyInit__generator"),
-            ("numpy.random.mtrand", "PyInit_mtrand"),
-            # Linear algebra (basic, uses internal fallback or OpenBLAS)
-            ("numpy.linalg._umath_linalg", "PyInit__umath_linalg"),
-            ("numpy.linalg.lapack_lite", "PyInit_lapack_lite"),
-            # FFT
-            ("numpy.fft._pocketfft_umath", "PyInit__pocketfft_umath"),
+            # Note: numpy.linalg._umath_linalg is not available - linalg patched to be optional
         ],
         "libraries": [
             "wasi-numpy/lib/libnumpy_core.a",
             "wasi-numpy/lib/libnpymath.a",
-            "wasi-numpy/lib/libnpyrandom.a",
-            # OpenBLAS is optional - if present, link it
-            # "wasi-openblas/lib/libopenblas.a",
         ],
         "python_dirs": [
             "wasi-numpy/python/numpy",

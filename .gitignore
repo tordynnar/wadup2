@@ -17,7 +17,9 @@ examples/*/Cargo.lock
 build/
 
 # Downloaded dependencies (WASI SDK, compression libs, etc.)
-deps/
+deps/*
+# But keep our custom stubs
+!deps/wasi-stubs/
 
 # Python WASM module build artifacts
 examples/python-*/src/*.o

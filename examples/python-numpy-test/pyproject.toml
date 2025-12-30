@@ -1,0 +1,7 @@
+[project]
+name = "python-numpy-test"
+version = "0.1.0"
+
+[tool.wadup]
+entry-point = "python_numpy_test"
+c-extensions = ["numpy"]
