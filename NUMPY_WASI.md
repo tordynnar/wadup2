@@ -311,6 +311,72 @@ These NumPy submodules are not yet available:
 | BLAS | `-Dallow-noblas=true` | Same |
 | Threading | Disabled | Disabled (`NPY_NO_SMP=1`) |
 
+### Why We Can't Use Pyodide's Cross-File Approach
+
+We investigated whether using a meson cross-file (like Pyodide's `emscripten.meson.cross`) would simplify the WASI build. **Conclusion: it doesn't work for WASI.**
+
+#### What We Tried
+
+Created a WASI meson cross-file with:
+```ini
+[host_machine]
+system = 'wasi'
+cpu_family = 'wasm32'
+cpu = 'wasm32'
+endian = 'little'
+
+[properties]
+longdouble_format = 'IEEE_QUAD_LE'
+skip_sanity_check = true
+
+[binaries]
+c = '/path/to/wasi-sdk/bin/clang'
+# ... etc
+```
+
+Meson setup succeeded and correctly detected WASI type sizes (`sizeof(long)=4`).
+
+#### Why It Failed
+
+The ninja build failed with:
+```
+pyport.h:399: error: "LONG_BIT definition appears wrong for platform"
+```
+
+**Root cause:** Meson's `dependency('python')` in numpy's `meson.build` finds the **native** Python (e.g., macOS arm64), not WASI Python. This adds native Python headers to the include path:
+
+```
+-I/Users/.../python3.13/include/python3.13  # Native headers added by meson
+```
+
+The native `pyport.h` checks `sizeof(long) * CHAR_BIT == LONG_BIT`. With WASI compiler:
+- `sizeof(long) = 4` (32-bit)
+- But native headers expect `LONG_BIT = 64`
+
+This is a fundamental meson limitation for cross-compiling Python extensions to a different architecture.
+
+#### Why Pyodide Works
+
+Pyodide uses Emscripten, which has special Python integration:
+- Emscripten builds include Emscripten-specific Python headers
+- The Python dependency resolves to Emscripten Python, not native Python
+
+For WASI, there's no such integration in meson.
+
+#### Alternatives Considered
+
+1. **Patch numpy's meson.build** - Remove `dependency('python')` calls
+   - Too complex, high maintenance burden
+
+2. **Override include paths** - Put WASI Python headers first
+   - Meson adds native Python headers after our args
+
+3. **Two-stage build** (our approach)
+   - Native build generates code, we cross-compile separately
+   - Clean separation, no meson patching needed
+
+The two-stage approach is actually simpler and more maintainable than trying to make meson cross-compilation work.
+
 ## References
 
 - [Pyodide NumPy package](https://github.com/pyodide/pyodide/tree/main/packages/numpy)
