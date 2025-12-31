@@ -12,7 +12,7 @@ DEPS_DIR="$WADUP_ROOT/deps"
 BUILD_DIR="$WADUP_ROOT/build"
 
 # Versions
-NUMPY_VERSION="2.1.3"
+NUMPY_VERSION="2.4.0"
 
 # Detect platform
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -143,7 +143,7 @@ CORE_INCLUDE="$NUMPY_SRC/numpy/_core/include"
 GENERATED_DIR="$NATIVE_BUILD"
 
 # WASI compilation flags
-WASI_CFLAGS="-O2 -fPIC"
+WASI_CFLAGS="-O2 -fPIC -DNDEBUG"
 WASI_CFLAGS="$WASI_CFLAGS --target=wasm32-wasi"
 WASI_CFLAGS="$WASI_CFLAGS --sysroot=$WASI_SYSROOT"
 WASI_CFLAGS="$WASI_CFLAGS -I$PYTHON_INCLUDE"
@@ -254,6 +254,13 @@ if [ -f "$DEPS_DIR/wasi-stubs/numpy_trig_stubs.c" ]; then
     compile_file "$DEPS_DIR/wasi-stubs/numpy_trig_stubs.c" || true
 fi
 
+# Compile C++ runtime stubs (operator new/delete for WASI)
+# WASI SDK's libc++ doesn't provide these operators by default
+if [ -f "$DEPS_DIR/wasi-stubs/cxx_runtime.c" ]; then
+    echo "  Compiling C++ runtime stubs..."
+    compile_file "$DEPS_DIR/wasi-stubs/cxx_runtime.c" || true
+fi
+
 # Note: Real linalg is built separately (lapack_lite + umath_linalg.cpp)
 # The old numpy_linalg_stub.c is no longer used
 
@@ -272,6 +279,11 @@ for src in "$CORE_SRC/common"/*.c; do
     [ -f "$src" ] && compile_file "$src" || true
 done
 
+# Compile common C++ sources (npy_hashtable.cpp)
+for src in "$CORE_SRC/common"/*.cpp; do
+    [ -f "$src" ] && compile_cpp_file "$src" || true
+done
+
 # Compile multiarray sources
 echo ""
 echo "Compiling multiarray sources..."
@@ -279,11 +291,36 @@ for src in "$CORE_SRC/multiarray"/*.c; do
     [ -f "$src" ] && compile_file "$src" || true
 done
 
+# Compile multiarray C++ sources (einsum.cpp)
+# Note: unique.cpp is skipped - it uses C++ exceptions which require libc++ runtime
+# that isn't fully available in WASI. A stub is provided in wasi-stubs instead.
+for src in "$CORE_SRC/multiarray"/*.cpp; do
+    if [ -f "$src" ]; then
+        if [[ "$src" == *"unique.cpp" ]]; then
+            # Skip unique.cpp - uses exceptions, stub provided
+            true
+        else
+            compile_cpp_file "$src" || true
+        fi
+    fi
+done
+
+# Compile unique.cpp stub
+if [ -f "$DEPS_DIR/wasi-stubs/numpy/unique_stub.c" ]; then
+    echo "  Compiling unique stub..."
+    compile_file "$DEPS_DIR/wasi-stubs/numpy/unique_stub.c" || true
+fi
+
 # Compile multiarray/stringdtype sources
 echo ""
 echo "Compiling stringdtype sources..."
 for src in "$CORE_SRC/multiarray/stringdtype"/*.c; do
     [ -f "$src" ] && compile_file "$src" || true
+done
+
+# Compile stringdtype C++ sources (casts.cpp)
+for src in "$CORE_SRC/multiarray/stringdtype"/*.cpp; do
+    [ -f "$src" ] && compile_cpp_file "$src" || true
 done
 
 # Compile multiarray/textreading sources
@@ -535,6 +572,25 @@ if old_import in content and 'Safe import for WASM' not in content:
 else:
     print('Already patched or pattern not found')
 " "$DEFMATRIX"
+fi
+
+# Copy generated API headers for use by other packages (pandas, etc.)
+echo ""
+echo "Copying generated API headers..."
+INCLUDE_DIR="$DEPS_DIR/wasi-numpy/python/numpy/_core/include/numpy"
+
+# Copy generated headers from numpy/_core directory
+for header in "$NATIVE_BUILD/numpy/_core"/__*_api.h; do
+    if [ -f "$header" ]; then
+        cp "$header" "$INCLUDE_DIR/"
+        echo "  Copied $(basename $header)"
+    fi
+done
+
+# Also copy _numpyconfig.h from wasi-stubs to the include directory
+if [ -f "$DEPS_DIR/wasi-stubs/numpy/_numpyconfig.h" ]; then
+    cp "$DEPS_DIR/wasi-stubs/numpy/_numpyconfig.h" "$INCLUDE_DIR/"
+    echo "  Copied _numpyconfig.h (WASI version)"
 fi
 
 # Clean up source

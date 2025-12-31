@@ -14,7 +14,7 @@ DEPS_DIR="$WADUP_ROOT/deps"
 BUILD_DIR="$WADUP_ROOT/build"
 
 # Versions
-PANDAS_VERSION="2.2.3"
+PANDAS_VERSION="2.3.3"
 
 # Detect platform
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -132,7 +132,9 @@ echo "=== Stage 2: Cross-compile for WASI ==="
 echo ""
 
 # WASI compilation flags
-WASI_CFLAGS="-O2 -fPIC"
+WASI_CFLAGS="-O2 -fPIC -DNDEBUG"
+# Disable Cython threading checks for single-threaded WASI
+WASI_CFLAGS="$WASI_CFLAGS -DCYTHON_WITHOUT_ASSERTIONS=1"
 WASI_CFLAGS="$WASI_CFLAGS --target=wasm32-wasi"
 WASI_CFLAGS="$WASI_CFLAGS --sysroot=$WASI_SYSROOT"
 WASI_CFLAGS="$WASI_CFLAGS -I$PYTHON_INCLUDE"
@@ -290,7 +292,7 @@ if [ -d "$PARSER_SRC" ]; then
     done
 fi
 
-# Compile vendored sources (ujson only - skip numpy datetime to avoid symbol conflicts)
+# Compile vendored sources (ujson and numpy datetime)
 echo ""
 echo "Compiling vendored sources..."
 VENDORED_SRC="$PANDAS_SRC/pandas/_libs/src/vendored"
@@ -298,19 +300,38 @@ VENDORED_SRC="$PANDAS_SRC/pandas/_libs/src/vendored"
 if [ -d "$VENDORED_SRC" ]; then
     for src in $(find "$VENDORED_SRC" -name "*.c" 2>/dev/null); do
         if [ -f "$src" ]; then
-            # Skip numpy datetime vendored files - they conflict with NumPy 2.x
+            # Include vendored numpy datetime with special flags
             if [[ "$src" == *"numpy/datetime"* ]]; then
-                echo "  (skip) $(basename $src) - numpy datetime conflicts"
-                continue
+                echo "  Compiling vendored datetime: $(basename $src)"
+                # Compile with include paths for numpy datetime headers
+                DATETIME_FLAGS="-I$VENDORED_SRC -I$VENDORED_SRC/numpy/datetime"
+                DATETIME_FLAGS="$DATETIME_FLAGS -I$PANDAS_SRC/pandas/_libs/include/pandas/vendored/numpy/datetime"
+                compile_file "$src" "$DATETIME_FLAGS" || true
+            else
+                compile_file "$src" "-I$VENDORED_SRC" || true
             fi
-            compile_file "$src" "-I$VENDORED_SRC" || true
         fi
     done
 fi
 
-# Skip pandas_datetime module - it uses vendored numpy datetime which conflicts
+# Compile pandas_datetime module sources directly from source tree
+# These are pure C files (not Cython-generated), found in src/datetime/
 echo ""
-echo "Skipping pandas_datetime module (datetime symbol conflicts)..."
+echo "Compiling pandas_datetime module..."
+DATETIME_SRC="$PANDAS_SRC/pandas/_libs/src/datetime"
+if [ -d "$DATETIME_SRC" ]; then
+    echo "  Compiling datetime sources from $DATETIME_SRC..."
+    DATETIME_FLAGS="-I$VENDORED_SRC -I$PANDAS_SRC/pandas/_libs/src"
+    DATETIME_FLAGS="$DATETIME_FLAGS -I$PANDAS_SRC/pandas/_libs/include"
+    DATETIME_FLAGS="$DATETIME_FLAGS -I$PANDAS_SRC/pandas/_libs/include/pandas/vendored/numpy/datetime"
+    for src in "$DATETIME_SRC"/*.c; do
+        if [ -f "$src" ]; then
+            compile_file "$src" "$DATETIME_FLAGS" || true
+        fi
+    done
+else
+    echo "  WARNING: datetime source directory not found at $DATETIME_SRC"
+fi
 
 # Create libpandas_libs.a from compiled objects
 echo ""

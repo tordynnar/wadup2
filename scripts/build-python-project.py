@@ -125,6 +125,7 @@ def extract_archive(archive_path: Path, extract_dir: Path) -> None:
 def copy_package_from_dir(pkg_dir: Path, bundle_dir: Path) -> None:
     """Copy Python packages from an extracted dependency directory."""
     skip_dirs = {'tests', 'test', 'docs', 'examples'}
+    found_something = False
 
     # Try src/ layout first (e.g., attrs uses src/attr/)
     src_dir = pkg_dir / "src"
@@ -136,21 +137,38 @@ def copy_package_from_dir(pkg_dir: Path, bundle_dir: Path) -> None:
                     shutil.rmtree(dest)
                 shutil.copytree(subpkg, dest)
                 print_success(f"  Added: {subpkg.name}")
+                found_something = True
+            elif subpkg.is_file() and subpkg.suffix == '.py':
+                # Handle single-file modules in src/ layout
+                dest = bundle_dir / subpkg.name
+                shutil.copy(subpkg, dest)
+                print_success(f"  Added: {subpkg.stem}")
+                found_something = True
     else:
         # Try flat layout (e.g., chardet uses chardet-5.2.0/chardet/)
         for subpkg in pkg_dir.iterdir():
-            if not subpkg.is_dir():
-                continue
-            if not (subpkg / "__init__.py").exists():
-                continue
-            if subpkg.name in skip_dirs or subpkg.name.startswith('.'):
-                continue
+            if subpkg.is_dir():
+                if not (subpkg / "__init__.py").exists():
+                    continue
+                if subpkg.name in skip_dirs or subpkg.name.startswith('.'):
+                    continue
 
-            dest = bundle_dir / subpkg.name
-            if dest.exists():
-                shutil.rmtree(dest)
-            shutil.copytree(subpkg, dest)
-            print_success(f"  Added: {subpkg.name}")
+                dest = bundle_dir / subpkg.name
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(subpkg, dest)
+                print_success(f"  Added: {subpkg.name}")
+                found_something = True
+            elif subpkg.is_file() and subpkg.suffix == '.py':
+                # Handle single-file modules (e.g., six.py)
+                # Skip setup.py, test files, and other non-library files
+                skip_files = {'setup.py', 'conftest.py', 'test_', 'tests_'}
+                if subpkg.name in skip_files or any(subpkg.name.startswith(s) for s in skip_files):
+                    continue
+                dest = bundle_dir / subpkg.name
+                shutil.copy(subpkg, dest)
+                print_success(f"  Added: {subpkg.stem}")
+                found_something = True
 
 
 def extract_wheel(wheel_path: Path, bundle_dir: Path, temp_dir: Path) -> None:
@@ -362,6 +380,29 @@ def main() -> int:
                 print_info(f"Bundling {pkg_name} Python files...")
                 shutil.copytree(src_path, bundle_dir / pkg_name)
 
+        # Copy WASI Python stubs (sysconfigdata, numpy.random stubs, etc.)
+        # These are copied AFTER C extension Python files so stubs can override/augment
+        wasi_stubs_python = deps_dir / "wasi-stubs" / "python"
+        if wasi_stubs_python.is_dir():
+            # Copy top-level .py files
+            for stub_file in wasi_stubs_python.glob("*.py"):
+                shutil.copy(stub_file, bundle_dir / stub_file.name)
+            # Copy stub packages (e.g., numpy/random)
+            for stub_pkg in wasi_stubs_python.iterdir():
+                if stub_pkg.is_dir():
+                    # Merge with existing package if it exists
+                    dest_pkg = bundle_dir / stub_pkg.name
+                    if dest_pkg.exists():
+                        # Copy contents into existing package
+                        for item in stub_pkg.rglob('*'):
+                            if item.is_file():
+                                rel_path = item.relative_to(stub_pkg)
+                                dest_file = dest_pkg / rel_path
+                                dest_file.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.copy(item, dest_file)
+                    else:
+                        shutil.copytree(stub_pkg, dest_pkg)
+
         # Handle dependencies (if any)
         if dependencies:
             print_info("Downloading dependencies (including transitive)...")
@@ -449,7 +490,9 @@ def main() -> int:
 
         # Build list of C extension libraries using registry
         ext_libs = []
+        resolved_extensions = []
         if c_extensions:
+            resolved_extensions = get_all_extensions(c_extensions)
             ext_lib_paths = get_all_libraries(c_extensions)
             for lib_path in ext_lib_paths:
                 full_path = deps_dir / lib_path
@@ -480,11 +523,11 @@ def main() -> int:
         ]
 
         # NumPy uses long double formatting which requires extra libc support
-        if "numpy" in c_extensions:
+        if "numpy" in resolved_extensions:
             link_cmd.append("-lc-printscan-long-double")
 
         # Pandas uses khash which has inline functions that can cause duplicate symbols
-        if "pandas" in c_extensions:
+        if "pandas" in resolved_extensions:
             link_cmd.insert(1, "-Wl,--allow-multiple-definition")
 
         result = subprocess.run(link_cmd, cwd=build_dir)

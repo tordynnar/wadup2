@@ -39,7 +39,7 @@
 
 #define NPY_VISIBILITY_HIDDEN __attribute__((visibility("hidden")))
 #define NPY_ABI_VERSION 0x02000000
-#define NPY_API_VERSION 0x00000013  /* 2.1 API */
+#define NPY_API_VERSION 0x00000015  /* 2.4 API */
 
 #ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS 1

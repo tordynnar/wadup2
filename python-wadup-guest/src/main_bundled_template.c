@@ -138,3 +138,11 @@ int process(void) {
 
     return 0;
 }
+
+// Entry point for WASI runtime
+// The WASI crt0's _start function calls main(), which then calls process()
+int main(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    return process();
+}

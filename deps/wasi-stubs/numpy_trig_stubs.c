@@ -27,11 +27,12 @@ typedef double npy_double;
     for(i = 0; i < n; i++, ip1 += is1, op1 += os1)
 
 /*
- * Trigonometric functions - only cos and sin need stubs
- * (tan, sinh, cosh, etc. are already defined in libnumpy_core.a)
+ * Trigonometric functions stubs for WASI.
+ * These wrap standard math.h functions with NumPy's strided loop signature.
  */
 
 void FLOAT_cos(char **args, npy_intp const *dimensions, npy_intp const *steps, void *data) {
+    (void)data;
     UNARY_LOOP {
         const npy_float in1 = *(npy_float *)ip1;
         *(npy_float *)op1 = cosf(in1);
@@ -39,6 +40,7 @@ void FLOAT_cos(char **args, npy_intp const *dimensions, npy_intp const *steps, v
 }
 
 void DOUBLE_cos(char **args, npy_intp const *dimensions, npy_intp const *steps, void *data) {
+    (void)data;
     UNARY_LOOP {
         const npy_double in1 = *(npy_double *)ip1;
         *(npy_double *)op1 = cos(in1);
@@ -46,6 +48,7 @@ void DOUBLE_cos(char **args, npy_intp const *dimensions, npy_intp const *steps, 
 }
 
 void FLOAT_sin(char **args, npy_intp const *dimensions, npy_intp const *steps, void *data) {
+    (void)data;
     UNARY_LOOP {
         const npy_float in1 = *(npy_float *)ip1;
         *(npy_float *)op1 = sinf(in1);
@@ -53,8 +56,25 @@ void FLOAT_sin(char **args, npy_intp const *dimensions, npy_intp const *steps, v
 }
 
 void DOUBLE_sin(char **args, npy_intp const *dimensions, npy_intp const *steps, void *data) {
+    (void)data;
     UNARY_LOOP {
         const npy_double in1 = *(npy_double *)ip1;
         *(npy_double *)op1 = sin(in1);
+    }
+}
+
+void FLOAT_tanh(char **args, npy_intp const *dimensions, npy_intp const *steps, void *data) {
+    (void)data;
+    UNARY_LOOP {
+        const npy_float in1 = *(npy_float *)ip1;
+        *(npy_float *)op1 = tanhf(in1);
+    }
+}
+
+void DOUBLE_tanh(char **args, npy_intp const *dimensions, npy_intp const *steps, void *data) {
+    (void)data;
+    UNARY_LOOP {
+        const npy_double in1 = *(npy_double *)ip1;
+        *(npy_double *)op1 = tanh(in1);
     }
 }
