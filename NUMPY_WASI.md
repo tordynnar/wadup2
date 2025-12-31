@@ -9,6 +9,7 @@ NumPy 2.1.3 now works on WASI with the following capabilities:
 - Mathematical operations (sum, mean, std, min, max)
 - Type introspection (shape, dtype)
 - Element-wise operations (arithmetic, comparison)
+- **Linear algebra** (solve, inv, det, eig, svd, qr, norm, etc.)
 
 **Test results:**
 ```
@@ -270,10 +271,12 @@ In `extensions/__init__.py`:
 "numpy": {
     "modules": [
         ("numpy._core._multiarray_umath", "PyInit__multiarray_umath"),
+        ("numpy.linalg._umath_linalg", "PyInit__umath_linalg"),
     ],
     "libraries": [
         "wasi-numpy/lib/libnumpy_core.a",
         "wasi-numpy/lib/libnpymath.a",
+        "wasi-numpy/lib/libnumpy_linalg.a",
     ],
     "python_dirs": [
         "wasi-numpy/python/numpy",
@@ -285,11 +288,30 @@ In `extensions/__init__.py`:
 
 ```
 Libraries:
--rw-r--r--  41090  libnpymath.a
+-rw-r--r--  39286    libnpymath.a
 -rw-r--r--  4898996  libnumpy_core.a  (4.9MB, 131 objects)
+-rw-r--r--  2856480  libnumpy_linalg.a (2.8MB, 10 objects)
 
-Final WASM module: ~42MB
+Final WASM module: ~43MB
 ```
+
+## numpy.linalg Support
+
+Linear algebra operations are now available! The `_umath_linalg` C extension provides:
+- `solve`, `inv`, `det` - Linear systems and matrix operations
+- `eig`, `eigh`, `eigvals`, `eigvalsh` - Eigenvalue decomposition
+- `svd`, `svdvals` - Singular value decomposition
+- `qr`, `cholesky` - Matrix decompositions
+- `norm`, `cond`, `matrix_rank` - Matrix norms and condition
+
+### Implementation
+
+The linalg module is built from:
+1. **lapack_lite** - NumPy's bundled LAPACK subset (f2c-converted Fortran)
+   - `f2c.c`, `f2c_blas.c`, `f2c_*_lapack.c` (9 source files)
+2. **umath_linalg.cpp** - Python bindings for LAPACK operations
+
+The build script compiles these separately into `libnumpy_linalg.a`.
 
 ## What's NOT Working
 
@@ -297,7 +319,6 @@ These NumPy submodules are not yet available:
 
 | Module | Reason |
 |--------|--------|
-| `numpy.linalg` | Requires LAPACK lite compilation |
 | `numpy.fft` | Requires pocketfft compilation |
 | `numpy.random` | Multiple C extensions needed |
 

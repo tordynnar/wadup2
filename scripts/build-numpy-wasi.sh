@@ -254,11 +254,8 @@ if [ -f "$DEPS_DIR/wasi-stubs/numpy_trig_stubs.c" ]; then
     compile_file "$DEPS_DIR/wasi-stubs/numpy_trig_stubs.c" || true
 fi
 
-# Compile linalg stub (provides numpy.linalg._umath_linalg)
-if [ -f "$DEPS_DIR/wasi-stubs/numpy_linalg_stub.c" ]; then
-    echo "  Compiling numpy linalg stub..."
-    compile_file "$DEPS_DIR/wasi-stubs/numpy_linalg_stub.c" || true
-fi
+# Note: Real linalg is built separately (lapack_lite + umath_linalg.cpp)
+# The old numpy_linalg_stub.c is no longer used
 
 # Create npymath library
 NPYMATH_OBJS=$(ls *.o 2>/dev/null | tr '\n' ' ')
@@ -375,6 +372,61 @@ fi
 # Create npyrandom placeholder
 touch "$DEPS_DIR/wasi-numpy/lib/libnpyrandom.a"
 
+# Build linalg (lapack_lite + umath_linalg)
+echo ""
+echo "=== Building numpy.linalg ==="
+echo ""
+
+mkdir -p "$NUMPY_SRC/build-wasi/linalg"
+cd "$NUMPY_SRC/build-wasi/linalg"
+
+LINALG_SRC="$NUMPY_SRC/numpy/linalg"
+LAPACK_LITE="$LINALG_SRC/lapack_lite"
+
+# Add linalg-specific includes to existing WASI_CFLAGS
+LINALG_CFLAGS="$WASI_CFLAGS -I$LAPACK_LITE"
+
+# Compile lapack_lite sources (f2c-converted LAPACK/BLAS)
+echo "Compiling lapack_lite sources..."
+for src in "$LAPACK_LITE"/*.c; do
+    if [ -f "$src" ]; then
+        obj=$(basename "${src%.c}.o")
+        if $WASI_CC $LINALG_CFLAGS -c "$src" -o "$obj" 2>/dev/null; then
+            echo "  ✓ $(basename $src)"
+        else
+            echo "  ✗ $(basename $src)"
+        fi
+    fi
+done
+
+# Compile umath_linalg.cpp
+echo ""
+echo "Compiling umath_linalg.cpp..."
+LINALG_CXXFLAGS="$WASI_CXXFLAGS -I$LAPACK_LITE"
+if $WASI_CXX $LINALG_CXXFLAGS -c "$LINALG_SRC/umath_linalg.cpp" -o umath_linalg.o 2>/dev/null; then
+    echo "  ✓ umath_linalg.cpp"
+else
+    echo "  ✗ umath_linalg.cpp (trying with more flags...)"
+    # Try with explicit macro redefinition handling
+    if $WASI_CXX $LINALG_CXXFLAGS -Wno-macro-redefined -c "$LINALG_SRC/umath_linalg.cpp" -o umath_linalg.o 2>/dev/null; then
+        echo "  ✓ umath_linalg.cpp (with -Wno-macro-redefined)"
+    fi
+fi
+
+# Create linalg library
+LINALG_OBJS=$(ls *.o 2>/dev/null | tr '\n' ' ')
+if [ -n "$LINALG_OBJS" ]; then
+    LINALG_OBJ_COUNT=$(echo $LINALG_OBJS | wc -w | tr -d ' ')
+    $WASI_AR rcs "$DEPS_DIR/wasi-numpy/lib/libnumpy_linalg.a" *.o
+    echo ""
+    echo "Created libnumpy_linalg.a with $LINALG_OBJ_COUNT object files"
+else
+    echo "WARNING: No linalg objects compiled"
+    touch "$DEPS_DIR/wasi-numpy/lib/libnumpy_linalg.a"
+fi
+
+cd "$NUMPY_SRC/build-wasi"
+
 # Copy Python files
 echo ""
 echo "Copying Python files..."
@@ -429,55 +481,34 @@ else:
 " "$NUMPY_INIT"
 fi
 
-# Completely replace numpy/linalg/__init__.py for WASM
+# Patch numpy/linalg/__init__.py to remove deprecated linalg import
+# The real linalg implementation is now available via libnumpy_linalg.a
 LINALG_INIT="$DEPS_DIR/wasi-numpy/python/numpy/linalg/__init__.py"
 if [ -f "$LINALG_INIT" ]; then
     echo "Patching numpy/linalg/__init__.py for WASM compatibility..."
-    cat > "$LINALG_INIT" << 'LINALG_PATCH'
-"""
-numpy.linalg - Stub for WASM compatibility
+    python3 -c "
+import sys
+file_path = sys.argv[1]
+with open(file_path, 'r') as f:
+    content = f.read()
 
-Linear algebra functions are not available in the WASM build.
-"""
+# Remove deprecated linalg import that causes circular import
+# The line 'from . import linalg  # deprecated in NumPy 2.0' causes issues
+old = 'from . import linalg  # deprecated in NumPy 2.0'
+new = '# from . import linalg  # deprecated in NumPy 2.0 - removed for WASM'
 
-class LinAlgError(Exception):
-    """Linear algebra error - linalg not available in WASM."""
-    pass
-
-def _not_available(*args, **kwargs):
-    raise NotImplementedError("numpy.linalg is not available in WASM builds")
-
-# Stub all common functions
-matrix_power = _not_available
-solve = _not_available
-lstsq = _not_available
-inv = _not_available
-pinv = _not_available
-det = _not_available
-eig = _not_available
-eigh = _not_available
-eigvals = _not_available
-eigvalsh = _not_available
-svd = _not_available
-svdvals = _not_available
-cholesky = _not_available
-qr = _not_available
-norm = _not_available
-matrix_norm = _not_available
-vector_norm = _not_available
-cond = _not_available
-matrix_rank = _not_available
-slogdet = _not_available
-tensorsolve = _not_available
-tensorinv = _not_available
-multi_dot = _not_available
-
-__all__ = ['LinAlgError']
-LINALG_PATCH
-    echo "Replaced linalg/__init__.py with WASM stub"
+if old in content:
+    content = content.replace(old, new)
+    with open(file_path, 'w') as f:
+        f.write(content)
+    print('Patched linalg/__init__.py successfully')
+else:
+    print('Already patched or pattern not found')
+" "$LINALG_INIT"
 fi
 
-# Patch numpy/matrixlib/defmatrix.py to not import linalg at module level
+# Patch numpy/matrixlib/defmatrix.py to make linalg import safe
+# In case of circular import issues during initialization
 DEFMATRIX="$DEPS_DIR/wasi-numpy/python/numpy/matrixlib/defmatrix.py"
 if [ -f "$DEFMATRIX" ]; then
     echo "Patching numpy/matrixlib/defmatrix.py for WASM compatibility..."
@@ -487,28 +518,17 @@ file_path = sys.argv[1]
 with open(file_path, 'r') as f:
     content = f.read()
 
-# Make linalg import lazy/optional
+# Make linalg import error-safe (in case of circular import during init)
 old_import = 'from numpy.linalg import matrix_power'
-new_import = '''# Lazy import for WASM compatibility
-def _get_matrix_power():
-    try:
-        from numpy.linalg import matrix_power
-        return matrix_power
-    except ImportError:
-        def matrix_power_stub(*args, **kwargs):
-            raise NotImplementedError(\"matrix_power not available in WASM\")
-        return matrix_power_stub
-matrix_power = None  # Will be set on first use'''
+new_import = '''# Safe import for WASM - may need lazy loading during init
+try:
+    from numpy.linalg import matrix_power
+except ImportError:
+    def matrix_power(*args, **kwargs):
+        raise ImportError(\"numpy.linalg not available\")'''
 
-if old_import in content and 'Lazy import for WASM' not in content:
+if old_import in content and 'Safe import for WASM' not in content:
     content = content.replace(old_import, new_import)
-
-    # Also patch the usage to call the getter
-    content = content.replace(
-        'matrix_power(self.A',
-        '(_get_matrix_power() if matrix_power is None else matrix_power)(self.A'
-    )
-
     with open(file_path, 'w') as f:
         f.write(content)
     print('Patched defmatrix.py successfully')

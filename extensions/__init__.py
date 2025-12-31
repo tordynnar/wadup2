@@ -34,11 +34,13 @@ EXTENSIONS = {
         "modules": [
             # Core array module - the main multiarray_umath extension
             ("numpy._core._multiarray_umath", "PyInit__multiarray_umath"),
-            # Note: numpy.linalg._umath_linalg is not available - linalg patched to be optional
+            # Linear algebra ufuncs (solve, inv, det, eig, svd, etc.)
+            ("numpy.linalg._umath_linalg", "PyInit__umath_linalg"),
         ],
         "libraries": [
             "wasi-numpy/lib/libnumpy_core.a",
             "wasi-numpy/lib/libnpymath.a",
+            "wasi-numpy/lib/libnumpy_linalg.a",
         ],
         "python_dirs": [
             "wasi-numpy/python/numpy",
@@ -46,6 +48,7 @@ EXTENSIONS = {
         "dependencies": [],
         "validation": [
             "wasi-numpy/lib/libnumpy_core.a",
+            "wasi-numpy/lib/libnumpy_linalg.a",
         ],
     },
 
