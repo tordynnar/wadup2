@@ -52,42 +52,30 @@ EXTENSIONS = {
         ],
     },
 
-    "pandas": {
-        "modules": [
-            # Core pandas C extensions
-            ("pandas._libs.lib", "PyInit_lib"),
-            ("pandas._libs.hashtable", "PyInit_hashtable"),
-            ("pandas._libs.algos", "PyInit_algos"),
-            ("pandas._libs.arrays", "PyInit_arrays"),
-            ("pandas._libs.groupby", "PyInit_groupby"),
-            ("pandas._libs.hashing", "PyInit_hashing"),
-            ("pandas._libs.index", "PyInit_index"),
-            ("pandas._libs.indexing", "PyInit_indexing"),
-            ("pandas._libs.internals", "PyInit_internals"),
-            ("pandas._libs.interval", "PyInit_interval"),
-            ("pandas._libs.join", "PyInit_join"),
-            ("pandas._libs.missing", "PyInit_missing"),
-            ("pandas._libs.ops", "PyInit_ops"),
-            ("pandas._libs.ops_dispatch", "PyInit_ops_dispatch"),
-            ("pandas._libs.parsers", "PyInit_parsers"),
-            ("pandas._libs.properties", "PyInit_properties"),
-            ("pandas._libs.reshape", "PyInit_reshape"),
-            ("pandas._libs.sparse", "PyInit_sparse"),
-            ("pandas._libs.tslib", "PyInit_tslib"),
-            ("pandas._libs.writers", "PyInit_writers"),
-        ],
-        "libraries": [
-            "wasi-pandas/lib/libpandas_libs.a",
-        ],
-        "python_dirs": [
-            "wasi-pandas/python/pandas",
-        ],
-        "dependencies": ["numpy"],
-        "validation": [
-            "wasi-pandas/lib/libpandas_libs.a",
-        ],
-    },
 }
+
+# PANDAS WASI STATUS: NOT WORKING
+# ================================
+# Pandas WASI support is blocked by fundamental incompatibilities:
+#
+# 1. Symbol Conflicts: Pandas vendors old NumPy datetime code (pre-2.x API) with
+#    different function signatures. When statically linked with NumPy 2.x, the
+#    wrong function is called at runtime, causing crashes.
+#    Example: get_datetime_metadata_from_dtype(i32)->i32 vs (i32,i32)->void
+#
+# 2. Tight Coupling: The pandas Python code expects its C extensions to exist.
+#    Even bundling just the Python files fails because imports like
+#    pandas._libs.lib are mandatory and can't be stubbed easily.
+#
+# 3. The build script (scripts/build-pandas-wasi.sh) successfully produces
+#    libpandas_libs.a and libpandas_tslibs.a, but these cannot be safely used
+#    alongside NumPy due to the datetime ABI mismatch.
+#
+# POSSIBLE SOLUTIONS (not implemented):
+# - Wait for pandas to update vendored datetime code for NumPy 2.x compatibility
+# - Use objcopy or similar to rename conflicting symbols at link time
+# - Build against an older NumPy version that matches pandas' vendored code
+# - Create Python stubs for all pandas._libs modules (complex, partial functionality)
 
 
 def get_all_extensions(requested: list[str]) -> list[str]:
@@ -121,7 +109,12 @@ def get_all_modules(extensions: list[str]) -> list[tuple[str, str]]:
 
 
 def get_all_libraries(extensions: list[str]) -> list[str]:
-    """Get all library paths for the given extensions."""
+    """Get all library paths for the given extensions.
+
+    Returns libraries in dependency order (dependencies first, main extension last).
+    This ensures numpy's datetime functions are used (correct signature) and pandas
+    accesses its vendored versions through the PandasDateTimeAPI capsule at runtime.
+    """
     libraries = []
     for ext in get_all_extensions(extensions):
         libraries.extend(EXTENSIONS[ext].get("libraries", []))

@@ -482,6 +482,11 @@ def main() -> int:
         # NumPy uses long double formatting which requires extra libc support
         if "numpy" in c_extensions:
             link_cmd.append("-lc-printscan-long-double")
+
+        # Pandas uses khash which has inline functions that can cause duplicate symbols
+        if "pandas" in c_extensions:
+            link_cmd.insert(1, "-Wl,--allow-multiple-definition")
+
         result = subprocess.run(link_cmd, cwd=build_dir)
         if result.returncode != 0:
             print_error("Linking failed")

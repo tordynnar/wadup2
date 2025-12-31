@@ -52,4 +52,8 @@ Thumbs.db
 *.bak
 
 # Claude
-.claudeextensions/__pycache__
+.claude
+
+# Python
+__pycache__/
+*.pyc
