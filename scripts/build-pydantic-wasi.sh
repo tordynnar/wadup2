@@ -116,8 +116,11 @@ cp python/pydantic_core/__init__.py "$DEPS_DIR/wasi-pydantic/python/pydantic_cor
 cp python/pydantic_core/core_schema.py "$DEPS_DIR/wasi-pydantic/python/pydantic_core/"
 
 # Create __init__.py that imports from the C extension
+# Note: We keep this minimal to avoid typing_extensions dependency
 cat > "$DEPS_DIR/wasi-pydantic/python/pydantic_core/__init__.py" << 'PYEOF'
 """pydantic_core - Core validation library for Pydantic V2."""
+from __future__ import annotations
+
 from _pydantic_core import (
     ArgsKwargs,
     MultiHostUrl,
@@ -140,32 +143,30 @@ from _pydantic_core import (
     from_json,
     to_json,
     to_jsonable_python,
-    list_all_errors,
 )
 
 __all__ = [
-    "__version__",
-    "ArgsKwargs",
-    "MultiHostUrl",
-    "PydanticCustomError",
-    "PydanticKnownError",
-    "PydanticOmit",
-    "PydanticSerializationError",
-    "PydanticSerializationUnexpectedValue",
-    "PydanticUndefined",
-    "PydanticUndefinedType",
-    "PydanticUseDefault",
-    "SchemaError",
-    "SchemaSerializer",
-    "SchemaValidator",
-    "Some",
-    "TzInfo",
-    "Url",
-    "ValidationError",
-    "from_json",
-    "to_json",
-    "to_jsonable_python",
-    "list_all_errors",
+    '__version__',
+    'ArgsKwargs',
+    'MultiHostUrl',
+    'PydanticCustomError',
+    'PydanticKnownError',
+    'PydanticOmit',
+    'PydanticSerializationError',
+    'PydanticSerializationUnexpectedValue',
+    'PydanticUndefined',
+    'PydanticUndefinedType',
+    'PydanticUseDefault',
+    'SchemaError',
+    'SchemaSerializer',
+    'SchemaValidator',
+    'Some',
+    'TzInfo',
+    'Url',
+    'ValidationError',
+    'from_json',
+    'to_json',
+    'to_jsonable_python',
 ]
 PYEOF
 

@@ -192,6 +192,72 @@ The following pydantic_core features have been tested and work on WASI:
 - JSON serialization of all basic types
 - Proper encoding to bytes
 
+## Why the Full Pydantic Library Doesn't Work
+
+**Important:** Only `pydantic_core` works on WASI. The full `pydantic` library (with `BaseModel`, `Field`, etc.) does not work due to the following limitations:
+
+### 1. Stack Overflow During Import
+
+The pydantic library has deep, complex import chains:
+```
+pydantic → pydantic.main → pydantic._internal._decorators → pydantic._internal._core_utils → ...
+```
+
+These nested imports exceed WASI's default stack limits, causing a stack overflow during module initialization.
+
+### 2. typing_extensions Dependency
+
+Both `pydantic` and `pydantic_core`'s `core_schema.py` module depend on `typing_extensions`:
+```python
+from typing_extensions import TypeVar, deprecated, Sentinel
+```
+
+The `typing_extensions` package is not bundled by default, and bundling it adds complexity and size.
+
+### 3. Complex Type System
+
+Pydantic's `BaseModel` relies heavily on Python's type system, metaclasses, and runtime type introspection. These features work but add significant overhead and import complexity.
+
+### Workaround: Use pydantic_core Directly
+
+Instead of:
+```python
+from pydantic import BaseModel, Field
+
+class Person(BaseModel):
+    name: str
+    age: int = Field(ge=0)
+```
+
+Use pydantic_core's schema dictionary format:
+```python
+from pydantic_core import SchemaValidator, ValidationError
+
+person_schema = {
+    "type": "typed-dict",
+    "fields": {
+        "name": {"type": "typed-dict-field", "schema": {"type": "str"}},
+        "age": {"type": "typed-dict-field", "schema": {"type": "int", "ge": 0}},
+    },
+}
+validator = SchemaValidator(person_schema)
+
+try:
+    result = validator.validate_python({"name": "Alice", "age": 30})
+except ValidationError as e:
+    print(f"Invalid: {e}")
+```
+
+This approach:
+- Avoids the complex import chain
+- Doesn't require typing_extensions
+- Works reliably on WASI
+- Provides the same validation capabilities
+
+### Schema Reference
+
+For schema dictionary syntax, see the [pydantic_core documentation](https://docs.pydantic.dev/latest/concepts/json_schema/) or the `core_schema.py` source file.
+
 ## Key Learnings
 
 ### 1. PyOnceLock Works on WASI

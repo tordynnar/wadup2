@@ -1257,6 +1257,9 @@ fn test_python_pandas() {
 fn test_python_pydantic() {
     // This test verifies that pydantic_core (Rust extension) works correctly in Python WASI.
     // The python-pydantic-test module uses SchemaValidator and SchemaSerializer.
+    //
+    // Note: The full pydantic library (BaseModel) requires complex imports that exceed
+    // WASI stack limits. Use pydantic_core directly for WASI modules.
 
     // Build the CLI
     let status = Command::new("cargo")

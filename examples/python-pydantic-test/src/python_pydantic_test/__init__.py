@@ -2,6 +2,9 @@
 
 This example demonstrates pydantic_core schema validation
 running on WASI, validating JSON data and outputting results.
+
+Note: The full pydantic library (BaseModel, etc.) requires complex imports
+that exceed WASI stack limits. Use pydantic_core directly for WASI modules.
 """
 
 import wadup
