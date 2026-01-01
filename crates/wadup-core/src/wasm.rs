@@ -964,15 +964,15 @@ impl ModuleInstance {
         // Get filesystem reference before borrowing store mutably
         let filesystem = self.store.data().wasi_ctx.filesystem.clone();
 
+        // Capture stdout/stderr before checking result (capture even on error)
+        let (stdout, stdout_truncated) = self.store.data().wasi_ctx.take_stdout();
+        let (stderr, stderr_truncated) = self.store.data().wasi_ctx.take_stderr();
+
         // Check result
         match result {
             Ok(0) => {
                 // Process any remaining metadata files that weren't closed before process() returned
                 Self::process_remaining_metadata_files(&filesystem, &mut self.store)?;
-
-                // Capture stdout/stderr before extracting context
-                let (stdout, stdout_truncated) = self.store.data().wasi_ctx.take_stdout();
-                let (stderr, stderr_truncated) = self.store.data().wasi_ctx.take_stderr();
 
                 // Success - extract context
                 let ctx = &mut self.store.data_mut().processing_ctx;
@@ -990,6 +990,23 @@ impl ModuleInstance {
                 Ok(extracted)
             }
             Ok(code) => {
+                // Return context with captured output even on failure (for debugging)
+                let ctx = &mut self.store.data_mut().processing_ctx;
+                let extracted = ProcessingContext {
+                    content_uuid: ctx.content_uuid,
+                    content_data: ctx.content_data.clone(),
+                    subcontent: std::mem::take(&mut ctx.subcontent),
+                    metadata: std::mem::take(&mut ctx.metadata),
+                    table_schemas: std::mem::take(&mut ctx.table_schemas),
+                    stdout: if stdout.is_empty() { None } else { Some(stdout) },
+                    stderr: if stderr.is_empty() { None } else { Some(stderr) },
+                    stdout_truncated,
+                    stderr_truncated,
+                };
+                // Log stderr if present for debugging
+                if let Some(ref stderr_content) = extracted.stderr {
+                    tracing::warn!("Module '{}' stderr: {}", self.name, stderr_content);
+                }
                 anyhow::bail!("Module '{}' returned error code: {}", self.name, code)
             }
             Err(e) => {

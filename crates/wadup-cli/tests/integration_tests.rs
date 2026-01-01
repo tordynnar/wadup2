@@ -280,13 +280,29 @@ fn build_python_module(module_name: &str) -> PathBuf {
     let mut python_example = workspace_root();
     python_example.push(format!("examples/{}", module_name));
 
-    // Build module using make
-    let build_status = Command::new("make")
-        .current_dir(&python_example)
-        .status()
-        .expect(&format!("Failed to run make for {}", module_name));
+    // Check if Makefile exists
+    let makefile_path = python_example.join("Makefile");
 
-    assert!(build_status.success(), "{} module build failed", module_name);
+    if makefile_path.exists() {
+        // Build module using make
+        let build_status = Command::new("make")
+            .current_dir(&python_example)
+            .status()
+            .expect(&format!("Failed to run make for {}", module_name));
+
+        assert!(build_status.success(), "{} module build failed", module_name);
+    } else {
+        // No Makefile - use build script directly
+        let mut build_script = workspace_root();
+        build_script.push("scripts/build-python-project.py");
+
+        let build_status = Command::new(&build_script)
+            .arg(&python_example)
+            .status()
+            .expect(&format!("Failed to run build script for {}", module_name));
+
+        assert!(build_status.success(), "{} module build failed", module_name);
+    }
 
     // Return path to WASM file
     let mut wasm_path = python_example;
@@ -928,4 +944,311 @@ fn test_python_multi_file() {
     println!("  - python-slugify dependency bundled and working (slug: {})", encoding_slug);
     println!("  - Text file encoding detected: {} (confidence: {})", encoding, confidence);
     println!("  - File analysis results correct for both text and binary files");
+}
+
+#[test]
+fn test_simple_module() {
+    // This test verifies that the simplest possible Rust module can load and run.
+    // The simple-test module just returns 0 (success) without emitting any metadata.
+
+    // Build the CLI
+    let status = Command::new("cargo")
+        .args(&["build", "--release"])
+        .current_dir(workspace_root())
+        .status()
+        .expect("Failed to build wadup CLI");
+    assert!(status.success(), "CLI build failed");
+
+    // Setup modules directory
+    let modules_dir = setup_modules_dir(&["simple-test"]);
+
+    // Setup input directory with a test file
+    let input_dir = tempfile::tempdir().unwrap();
+    fs::write(input_dir.path().join("test.txt"), "hello world").unwrap();
+
+    // Setup output database
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_db = output_dir.path().join("output.db");
+
+    // Run wadup
+    let status = Command::new(wadup_binary())
+        .args(&[
+            "--modules", modules_dir.path().to_str().unwrap(),
+            "--input", input_dir.path().to_str().unwrap(),
+            "--output", output_db.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to run wadup");
+
+    assert!(status.success(), "wadup execution failed");
+
+    // Verify results - content should be tracked even with a no-op module
+    let conn = rusqlite::Connection::open(&output_db).unwrap();
+
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM __wadup_content",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(count, 1, "Expected 1 content entry, got {}", count);
+
+    println!("✓ Simple module test verified: module loaded and ran successfully");
+}
+
+#[test]
+fn test_python_lxml() {
+    // This test verifies that the lxml C extension works correctly in Python WASI.
+    // The python-lxml-test module parses XML and outputs elements to a table.
+
+    // Build the CLI
+    let status = Command::new("cargo")
+        .args(&["build", "--release"])
+        .current_dir(workspace_root())
+        .status()
+        .expect("Failed to build wadup CLI");
+    assert!(status.success(), "CLI build failed");
+
+    // Build Python lxml module
+    let python_wasm = build_python_module("python-lxml-test");
+
+    // Setup modules directory
+    let modules_dir = tempfile::tempdir().unwrap();
+    let dest = modules_dir.path().join("python_lxml_test.wasm");
+    fs::copy(&python_wasm, &dest).unwrap();
+
+    // Setup input directory with XML content
+    let input_dir = tempfile::tempdir().unwrap();
+    let xml_content = r#"<?xml version="1.0"?>
+<root>
+    <person name="Alice" age="30">
+        <email>alice@example.com</email>
+    </person>
+    <person name="Bob" age="25">
+        <email>bob@example.com</email>
+    </person>
+</root>"#;
+    fs::write(input_dir.path().join("test.xml"), xml_content).unwrap();
+
+    // Setup output database
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_db = output_dir.path().join("output.db");
+
+    // Run wadup
+    let status = Command::new(wadup_binary())
+        .args(&[
+            "--modules", modules_dir.path().to_str().unwrap(),
+            "--input", input_dir.path().to_str().unwrap(),
+            "--output", output_db.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to run wadup");
+
+    assert!(status.success(), "wadup execution failed");
+
+    // Verify results
+    let conn = rusqlite::Connection::open(&output_db).unwrap();
+
+    // Check that xml_elements table exists
+    let table_exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='xml_elements'",
+        [],
+        |row| row.get::<_, i64>(0)
+    ).unwrap() > 0;
+    assert!(table_exists, "xml_elements table not created");
+
+    // Get all elements
+    let elements: Vec<(i64, String, String, String)> = conn.prepare(
+        "SELECT depth, tag, text, attribs FROM xml_elements ORDER BY ROWID"
+    ).unwrap()
+    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap();
+
+    // Should have 5 elements: root, person (Alice), email, person (Bob), email
+    assert_eq!(elements.len(), 5, "Expected 5 XML elements, got {}", elements.len());
+
+    // First element should be root at depth 0
+    assert_eq!(elements[0].0, 0, "Root should be at depth 0");
+    assert_eq!(elements[0].1, "root", "First element should be 'root'");
+
+    // Check that person elements have attributes
+    let person_elements: Vec<_> = elements.iter()
+        .filter(|(_, tag, _, _)| tag == "person")
+        .collect();
+    assert_eq!(person_elements.len(), 2, "Expected 2 person elements");
+    assert!(person_elements[0].3.contains("Alice"), "First person should be Alice");
+    assert!(person_elements[1].3.contains("Bob"), "Second person should be Bob");
+
+    // Check email elements have text content
+    let email_elements: Vec<_> = elements.iter()
+        .filter(|(_, tag, _, _)| tag == "email")
+        .collect();
+    assert_eq!(email_elements.len(), 2, "Expected 2 email elements");
+    assert!(email_elements[0].2.contains("alice@example.com"), "First email should be alice@example.com");
+    assert!(email_elements[1].2.contains("bob@example.com"), "Second email should be bob@example.com");
+
+    println!("✓ Python lxml test verified:");
+    println!("  - lxml.etree C extension imported successfully");
+    println!("  - XML parsing works correctly");
+    println!("  - {} elements extracted from XML", elements.len());
+}
+
+#[test]
+fn test_python_numpy() {
+    // This test verifies that NumPy C extensions work correctly in Python WASI.
+    // The python-numpy-test module creates arrays and performs basic operations.
+
+    // Build the CLI
+    let status = Command::new("cargo")
+        .args(&["build", "--release"])
+        .current_dir(workspace_root())
+        .status()
+        .expect("Failed to build wadup CLI");
+    assert!(status.success(), "CLI build failed");
+
+    // Build Python numpy module
+    let python_wasm = build_python_module("python-numpy-test");
+
+    // Setup modules directory
+    let modules_dir = tempfile::tempdir().unwrap();
+    let dest = modules_dir.path().join("python_numpy_test.wasm");
+    fs::copy(&python_wasm, &dest).unwrap();
+
+    // Setup input directory with numeric data
+    let input_dir = tempfile::tempdir().unwrap();
+    let numeric_data = "1.0, 2.0, 3.0, 4.0, 5.0";
+    fs::write(input_dir.path().join("numbers.txt"), numeric_data).unwrap();
+
+    // Setup output database
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_db = output_dir.path().join("output.db");
+
+    // Run wadup
+    let status = Command::new(wadup_binary())
+        .args(&[
+            "--modules", modules_dir.path().to_str().unwrap(),
+            "--input", input_dir.path().to_str().unwrap(),
+            "--output", output_db.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to run wadup");
+
+    assert!(status.success(), "wadup execution failed");
+
+    // Verify results
+    let conn = rusqlite::Connection::open(&output_db).unwrap();
+
+    // Check that numpy_result table exists
+    let table_exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='numpy_result'",
+        [],
+        |row| row.get::<_, i64>(0)
+    ).unwrap() > 0;
+    assert!(table_exists, "numpy_result table not created");
+
+    // Get result
+    let (numpy_version, sum, mean, min_val, max_val, std_val, status_msg):
+        (String, f64, f64, f64, f64, f64, String) = conn.query_row(
+        "SELECT numpy_version, sum, mean, min, max, std, status FROM numpy_result",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?))
+    ).unwrap();
+
+    // Check that NumPy operations succeeded
+    assert!(status_msg.contains("success"), "Expected success status, got: {}", status_msg);
+    assert!(!numpy_version.contains("N/A"), "NumPy version should be detected, got: {}", numpy_version);
+
+    // Verify calculations (1+2+3+4+5 = 15, mean = 3)
+    let epsilon = 0.001;
+    assert!((sum - 15.0).abs() < epsilon, "Expected sum=15, got {}", sum);
+    assert!((mean - 3.0).abs() < epsilon, "Expected mean=3, got {}", mean);
+    assert!((min_val - 1.0).abs() < epsilon, "Expected min=1, got {}", min_val);
+    assert!((max_val - 5.0).abs() < epsilon, "Expected max=5, got {}", max_val);
+    assert!(std_val > 0.0, "Expected std > 0, got {}", std_val);
+
+    println!("✓ Python NumPy test verified:");
+    println!("  - NumPy version: {}", numpy_version);
+    println!("  - Array operations work correctly");
+    println!("  - Sum: {}, Mean: {}, Min: {}, Max: {}, Std: {:.4}", sum, mean, min_val, max_val, std_val);
+}
+
+#[test]
+fn test_python_pandas() {
+    // This test verifies that Pandas works correctly in Python WASI.
+    // The python-pandas-test module creates DataFrames and performs aggregations.
+
+    // Build the CLI
+    let status = Command::new("cargo")
+        .args(&["build", "--release"])
+        .current_dir(workspace_root())
+        .status()
+        .expect("Failed to build wadup CLI");
+    assert!(status.success(), "CLI build failed");
+
+    // Build Python pandas module
+    let python_wasm = build_python_module("python-pandas-test");
+
+    // Setup modules directory
+    let modules_dir = tempfile::tempdir().unwrap();
+    let dest = modules_dir.path().join("python_pandas_test.wasm");
+    fs::copy(&python_wasm, &dest).unwrap();
+
+    // Setup input directory with CSV data
+    let input_dir = tempfile::tempdir().unwrap();
+    let csv_content = "name,age,score\nAlice,25,85.5\nBob,30,92.0\nCharlie,35,78.5";
+    fs::write(input_dir.path().join("data.csv"), csv_content).unwrap();
+
+    // Setup output database
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_db = output_dir.path().join("output.db");
+
+    // Run wadup
+    let status = Command::new(wadup_binary())
+        .args(&[
+            "--modules", modules_dir.path().to_str().unwrap(),
+            "--input", input_dir.path().to_str().unwrap(),
+            "--output", output_db.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to run wadup");
+
+    assert!(status.success(), "wadup execution failed");
+
+    // Verify results
+    let conn = rusqlite::Connection::open(&output_db).unwrap();
+
+    // Check that pandas_result table exists
+    let table_exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pandas_result'",
+        [],
+        |row| row.get::<_, i64>(0)
+    ).unwrap() > 0;
+    assert!(table_exists, "pandas_result table not created");
+
+    // Get result
+    let (pandas_version, numpy_version, input_rows, input_cols, column_names, status_msg):
+        (String, String, i64, i64, String, String) = conn.query_row(
+        "SELECT pandas_version, numpy_version, input_rows, input_cols, column_names, status FROM pandas_result",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+    ).unwrap();
+
+    // Check that Pandas operations succeeded
+    assert_eq!(status_msg, "success", "Expected 'success' status, got: {}", status_msg);
+    assert!(!pandas_version.contains("N/A"), "Pandas version should be detected, got: {}", pandas_version);
+    assert!(!numpy_version.contains("N/A"), "NumPy version should be detected, got: {}", numpy_version);
+
+    // Verify DataFrame properties
+    assert_eq!(input_rows, 3, "Expected 3 rows, got {}", input_rows);
+    assert_eq!(input_cols, 3, "Expected 3 columns, got {}", input_cols);
+    assert!(column_names.contains("name"), "Should have 'name' column");
+    assert!(column_names.contains("age"), "Should have 'age' column");
+    assert!(column_names.contains("score"), "Should have 'score' column");
+
+    println!("✓ Python Pandas test verified:");
+    println!("  - Pandas version: {}", pandas_version);
+    println!("  - NumPy version: {}", numpy_version);
+    println!("  - DataFrame: {} rows x {} columns", input_rows, input_cols);
+    println!("  - Columns: {}", column_names);
 }

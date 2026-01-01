@@ -12,14 +12,15 @@ def main():
     """Parse XML from input and output elements to a table."""
     # Define output table for XML elements
     wadup.define_table("xml_elements", [
-        ("depth", "Integer"),
+        ("depth", "Int64"),
         ("tag", "String"),
         ("text", "String"),
         ("attribs", "String"),
     ])
 
-    # Read input data
-    content = wadup.read_input()
+    # Read input data from /data.bin
+    with open('/data.bin', 'rb') as f:
+        content = f.read()
 
     try:
         # Parse XML
