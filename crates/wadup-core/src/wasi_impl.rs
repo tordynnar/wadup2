@@ -1,8 +1,12 @@
 use crate::memory_fs::{MemoryFilesystem, MemoryFile, MemoryDirectory};
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use parking_lot::{RwLock, Mutex};
 use std::io::{Read, Write, Seek, SeekFrom};
+
+/// Maximum bytes to capture from stdout/stderr per content (1 MB)
+const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 
 /// File descriptor
 type Fd = u32;
@@ -74,6 +78,14 @@ pub struct WasiCtx {
     pub filesystem: Arc<MemoryFilesystem>,
     file_table: Arc<RwLock<HashMap<Fd, FileHandle>>>,
     next_fd: Arc<RwLock<Fd>>,
+    /// Captured stdout output
+    stdout_capture: Mutex<Vec<u8>>,
+    /// Captured stderr output
+    stderr_capture: Mutex<Vec<u8>>,
+    /// Whether stdout was truncated due to size limit
+    stdout_truncated: AtomicBool,
+    /// Whether stderr was truncated due to size limit
+    stderr_truncated: AtomicBool,
 }
 
 impl WasiCtx {
@@ -91,6 +103,10 @@ impl WasiCtx {
             filesystem,
             file_table: Arc::new(RwLock::new(file_table)),
             next_fd: Arc::new(RwLock::new(4)),
+            stdout_capture: Mutex::new(Vec::new()),
+            stderr_capture: Mutex::new(Vec::new()),
+            stdout_truncated: AtomicBool::new(false),
+            stderr_truncated: AtomicBool::new(false),
         }
     }
 
@@ -275,21 +291,38 @@ impl WasiCtx {
                 *nwritten_out = total;
                 Errno::Success
             }
-            FileHandle::Stdout | FileHandle::Stderr => {
-                // Write to actual stdout/stderr
+            FileHandle::Stdout => {
+                // Capture stdout output (up to MAX_CAPTURE_BYTES)
+                let mut capture = self.stdout_capture.lock();
                 let mut total = 0;
                 for buf in bufs {
-                    if fd == 1 {
-                        match std::io::stdout().write(buf) {
-                            Ok(n) => total += n,
-                            Err(_) => return Errno::Io,
-                        }
-                    } else {
-                        match std::io::stderr().write(buf) {
-                            Ok(n) => total += n,
-                            Err(_) => return Errno::Io,
+                    let remaining = MAX_CAPTURE_BYTES.saturating_sub(capture.len());
+                    if remaining > 0 {
+                        let to_write = buf.len().min(remaining);
+                        capture.extend_from_slice(&buf[..to_write]);
+                        if to_write < buf.len() {
+                            self.stdout_truncated.store(true, Ordering::SeqCst);
                         }
                     }
+                    total += buf.len(); // Report full length as written
+                }
+                *nwritten_out = total;
+                Errno::Success
+            }
+            FileHandle::Stderr => {
+                // Capture stderr output (up to MAX_CAPTURE_BYTES)
+                let mut capture = self.stderr_capture.lock();
+                let mut total = 0;
+                for buf in bufs {
+                    let remaining = MAX_CAPTURE_BYTES.saturating_sub(capture.len());
+                    if remaining > 0 {
+                        let to_write = buf.len().min(remaining);
+                        capture.extend_from_slice(&buf[..to_write]);
+                        if to_write < buf.len() {
+                            self.stderr_truncated.store(true, Ordering::SeqCst);
+                        }
+                    }
+                    total += buf.len(); // Report full length as written
                 }
                 *nwritten_out = total;
                 Errno::Success
@@ -605,5 +638,32 @@ impl WasiCtx {
         }
 
         Ok((current_dir, filename))
+    }
+
+    /// Take captured stdout output and reset the buffer.
+    /// Returns (content as UTF-8 string, was_truncated flag).
+    pub fn take_stdout(&self) -> (String, bool) {
+        let mut capture = self.stdout_capture.lock();
+        let truncated = self.stdout_truncated.swap(false, Ordering::SeqCst);
+        let bytes = std::mem::take(&mut *capture);
+        (String::from_utf8_lossy(&bytes).into_owned(), truncated)
+    }
+
+    /// Take captured stderr output and reset the buffer.
+    /// Returns (content as UTF-8 string, was_truncated flag).
+    pub fn take_stderr(&self) -> (String, bool) {
+        let mut capture = self.stderr_capture.lock();
+        let truncated = self.stderr_truncated.swap(false, Ordering::SeqCst);
+        let bytes = std::mem::take(&mut *capture);
+        (String::from_utf8_lossy(&bytes).into_owned(), truncated)
+    }
+
+    /// Clear both stdout and stderr capture buffers.
+    /// Call this after processing each content in reactor pattern.
+    pub fn clear_captures(&self) {
+        self.stdout_capture.lock().clear();
+        self.stderr_capture.lock().clear();
+        self.stdout_truncated.store(false, Ordering::SeqCst);
+        self.stderr_truncated.store(false, Ordering::SeqCst);
     }
 }

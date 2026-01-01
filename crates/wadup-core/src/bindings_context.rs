@@ -8,6 +8,14 @@ pub struct ProcessingContext {
     pub subcontent: Vec<SubContentEmission>,
     pub metadata: Vec<MetadataRow>,
     pub table_schemas: Vec<TableSchema>,
+    /// Captured stdout from module (None if empty)
+    pub stdout: Option<String>,
+    /// Captured stderr from module (None if empty)
+    pub stderr: Option<String>,
+    /// Whether stdout was truncated due to size limit
+    pub stdout_truncated: bool,
+    /// Whether stderr was truncated due to size limit
+    pub stderr_truncated: bool,
 }
 
 impl ProcessingContext {
@@ -18,6 +26,10 @@ impl ProcessingContext {
             subcontent: Vec::new(),
             metadata: Vec::new(),
             table_schemas: Vec::new(),
+            stdout: None,
+            stderr: None,
+            stdout_truncated: false,
+            stderr_truncated: false,
         }
     }
 
@@ -25,6 +37,10 @@ impl ProcessingContext {
         self.subcontent.clear();
         self.metadata.clear();
         self.table_schemas.clear();
+        self.stdout = None;
+        self.stderr = None;
+        self.stdout_truncated = false;
+        self.stderr_truncated = false;
     }
 }
 

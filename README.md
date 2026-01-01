@@ -9,6 +9,7 @@ A high-performance parallel processing framework that executes sandboxed WebAsse
 - **Sandboxed Execution**: WASM modules run in isolated environments with configurable resource limits
 - **Resource Control**: CPU (fuel), memory, stack size, and recursion depth limits
 - **Metadata Collection**: SQLite database with automatic schema validation
+- **Output Capture**: Module stdout/stderr captured and stored per-module in the database
 - **Zero-Copy Architecture**: Memory-mapped file loading and SharedBuffer-based content slicing without duplication
 - **Recursive Processing**: Sub-content automatically queued for processing
 - **Ergonomic API**: Rust guest library for easy WASM module development
@@ -367,9 +368,13 @@ SubContent::emit_slice(
 
 WADUP uses a SQLite database as its metadata store, with WAL mode enabled for concurrent access. The store manages two types of tables:
 
-### System Table: `__wadup_content`
+### System Tables
 
-Automatically created to track all processed content:
+WADUP automatically creates two system tables:
+
+#### `__wadup_content`
+
+Tracks all processed content:
 
 ```sql
 CREATE TABLE __wadup_content (
@@ -383,6 +388,25 @@ CREATE TABLE __wadup_content (
 ```
 
 The `parent_uuid` column enables tracking of content hierarchies. For example, when a ZIP extractor module emits files from an archive, those files reference the ZIP's UUID as their parent.
+
+#### `__wadup_module_output`
+
+Captures stdout and stderr from each module per content:
+
+```sql
+CREATE TABLE __wadup_module_output (
+    content_uuid TEXT NOT NULL,      -- References __wadup_content(uuid)
+    module_name TEXT NOT NULL,       -- Name of the WASM module
+    stdout TEXT,                     -- Captured stdout (NULL if empty)
+    stderr TEXT,                     -- Captured stderr (NULL if empty)
+    stdout_truncated INTEGER NOT NULL, -- 1 if stdout exceeded 1MB limit
+    stderr_truncated INTEGER NOT NULL, -- 1 if stderr exceeded 1MB limit
+    PRIMARY KEY (content_uuid, module_name),
+    FOREIGN KEY (content_uuid) REFERENCES __wadup_content(uuid)
+);
+```
+
+This enables debugging and logging from modules. Output is captured silently (not echoed to terminal) and stored per-module. Each stream is limited to 1MB to prevent database bloat.
 
 ### Module-Defined Tables
 
@@ -439,6 +463,18 @@ WITH RECURSIVE ancestry AS (
     JOIN ancestry a ON c.uuid = a.parent_uuid
 )
 SELECT * FROM ancestry;
+
+-- View module stdout/stderr for a file
+SELECT c.filename, m.module_name, m.stdout, m.stderr
+FROM __wadup_module_output m
+JOIN __wadup_content c ON c.uuid = m.content_uuid
+WHERE c.filename LIKE '%example.json%';
+
+-- Find modules that produced errors (stderr)
+SELECT DISTINCT module_name, COUNT(*) as error_count
+FROM __wadup_module_output
+WHERE stderr IS NOT NULL
+GROUP BY module_name;
 ```
 
 ## Examples

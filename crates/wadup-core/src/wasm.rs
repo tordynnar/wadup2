@@ -970,6 +970,10 @@ impl ModuleInstance {
                 // Process any remaining metadata files that weren't closed before process() returned
                 Self::process_remaining_metadata_files(&filesystem, &mut self.store)?;
 
+                // Capture stdout/stderr before extracting context
+                let (stdout, stdout_truncated) = self.store.data().wasi_ctx.take_stdout();
+                let (stderr, stderr_truncated) = self.store.data().wasi_ctx.take_stderr();
+
                 // Success - extract context
                 let ctx = &mut self.store.data_mut().processing_ctx;
                 let extracted = ProcessingContext {
@@ -978,6 +982,10 @@ impl ModuleInstance {
                     subcontent: std::mem::take(&mut ctx.subcontent),
                     metadata: std::mem::take(&mut ctx.metadata),
                     table_schemas: std::mem::take(&mut ctx.table_schemas),
+                    stdout: if stdout.is_empty() { None } else { Some(stdout) },
+                    stderr: if stderr.is_empty() { None } else { Some(stderr) },
+                    stdout_truncated,
+                    stderr_truncated,
                 };
                 Ok(extracted)
             }
@@ -1081,6 +1089,10 @@ impl ModuleInstance {
             // Success - process any remaining metadata files that weren't closed before _start returned
             Self::process_remaining_metadata_files(&filesystem, &mut store)?;
 
+            // Capture stdout/stderr before extracting context
+            let (stdout, stdout_truncated) = store.data().wasi_ctx.take_stdout();
+            let (stderr, stderr_truncated) = store.data().wasi_ctx.take_stderr();
+
             // Extract context
             let ctx = &mut store.data_mut().processing_ctx;
             let extracted = ProcessingContext {
@@ -1089,6 +1101,10 @@ impl ModuleInstance {
                 subcontent: std::mem::take(&mut ctx.subcontent),
                 metadata: std::mem::take(&mut ctx.metadata),
                 table_schemas: std::mem::take(&mut ctx.table_schemas),
+                stdout: if stdout.is_empty() { None } else { Some(stdout) },
+                stderr: if stderr.is_empty() { None } else { Some(stderr) },
+                stdout_truncated,
+                stderr_truncated,
             };
             Ok(extracted)
         } else {

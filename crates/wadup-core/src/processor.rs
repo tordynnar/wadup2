@@ -243,6 +243,22 @@ impl WorkerThread {
                         }
                     }
 
+                    // Record module stdout/stderr output
+                    if let Err(e) = self.metadata_store.record_module_output(
+                        &content.uuid.to_string(),
+                        instance.name(),
+                        ctx.stdout.as_deref(),
+                        ctx.stderr.as_deref(),
+                        ctx.stdout_truncated,
+                        ctx.stderr_truncated,
+                    ) {
+                        tracing::warn!(
+                            "Failed to record module output for '{}': {}",
+                            instance.name(),
+                            e
+                        );
+                    }
+
                     // Collect sub-content
                     all_subcontent.extend(ctx.subcontent);
                 }

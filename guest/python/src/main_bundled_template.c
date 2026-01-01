@@ -140,9 +140,13 @@ int process(void) {
 }
 
 // Entry point for WASI runtime
-// The WASI crt0's _start function calls main(), which then calls process()
+// The WASI crt0's _start function calls main()
+// For reactor-style modules, main() just returns 0 (initialization only)
+// The process() function is called separately by the WADUP host for each file
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
-    return process();
+    // Don't call process() here - let WADUP call it directly for each file
+    // This ensures _start only initializes the runtime without processing content
+    return 0;
 }

@@ -36,6 +36,22 @@ impl MetadataStore {
             )",
             [],
         )?;
+
+        // Table for capturing stdout/stderr from each module per content
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS __wadup_module_output (
+                content_uuid TEXT NOT NULL,
+                module_name TEXT NOT NULL,
+                stdout TEXT,
+                stderr TEXT,
+                stdout_truncated INTEGER NOT NULL DEFAULT 0,
+                stderr_truncated INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (content_uuid, module_name),
+                FOREIGN KEY (content_uuid) REFERENCES __wadup_content(uuid)
+            )",
+            [],
+        )?;
+
         Ok(())
     }
 
@@ -179,6 +195,41 @@ impl MetadataStore {
              (uuid, filename, parent_uuid, processed_at, status, error_message)
              VALUES (?1, ?2, ?3, ?4, 'failed', ?5)",
             params![uuid, filename, parent_uuid, timestamp, error],
+        )?;
+
+        Ok(())
+    }
+
+    /// Record stdout/stderr output from a module for a specific content.
+    /// Only records if at least one of stdout or stderr is non-empty.
+    pub fn record_module_output(
+        &self,
+        content_uuid: &str,
+        module_name: &str,
+        stdout: Option<&str>,
+        stderr: Option<&str>,
+        stdout_truncated: bool,
+        stderr_truncated: bool,
+    ) -> Result<()> {
+        // Skip if nothing to record
+        if stdout.is_none() && stderr.is_none() {
+            return Ok(());
+        }
+
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            "INSERT OR REPLACE INTO __wadup_module_output
+             (content_uuid, module_name, stdout, stderr, stdout_truncated, stderr_truncated)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                content_uuid,
+                module_name,
+                stdout,
+                stderr,
+                stdout_truncated as i32,
+                stderr_truncated as i32
+            ],
         )?;
 
         Ok(())
