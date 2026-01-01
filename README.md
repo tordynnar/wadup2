@@ -41,7 +41,7 @@ wadup \
 
 ## Writing WASM Modules
 
-WADUP modules can be written in **Rust**, **Python**, **Go**, or **C#**, all compiled to the `wasm32-wasip1` (WASI) target.
+WADUP modules can be written in **Rust**, **Python**, or **Go**, all compiled to the `wasm32-wasip1` (WASI) target.
 
 ### Virtual Filesystem
 
@@ -55,30 +55,26 @@ Modules can access content using standard file I/O operations. The `/data.bin` f
 
 ### Language Support
 
-WADUP supports four languages for writing modules:
+WADUP supports three languages for writing modules:
 
 | Language | Entry Point | Module Pattern | WASM Size | Build Time |
 |----------|-------------|----------------|-----------|------------|
 | **Rust** | `process()` | Reused | ~2.5 MB | ~30s |
 | **Python** | `main()` | Reused | ~29 MB | ~5m (first) |
 | **Go** | `process()` | Reused | ~8.3 MB | ~10s |
-| **C#** | `_start` | Reload-per-call | ~17 MB | ~15s |
 
-All languages use file-based metadata output (writing JSON to `/metadata/*.json`). Guest libraries handle serialization automatically.
+All languages use file-based metadata output (writing JSON to `/metadata/*.json`). Guest libraries handle serialization automatically. All modules must export a `process()` function and are reused across files (one instance processes all files per thread).
 
-**Rust** modules export a `process()` function and are reused across files (one instance processes all files per thread).
+**Rust** modules export a `process()` function using `#[no_mangle] pub extern "C" fn process()`.
 
-**Python** modules use embedded CPython 3.13.7 with a `main()` function entry point. Supports pure-Python third-party dependencies and C extensions (NumPy, Pandas) bundled into the WASM module.
+**Python** modules use embedded CPython 3.13.7 with a `main()` function entry point. The C glue layer exports `process()`. Supports pure-Python third-party dependencies and C extensions (NumPy, Pandas) bundled into the WASM module.
 
-**Go** modules export a `process()` function using `//go:wasmexport` and are reused like Rust.
-
-**C#** modules use the `_start` entry point with reload-per-call (fresh instance per file).
+**Go** modules export a `process()` function using `//go:wasmexport process`.
 
 See language-specific guides:
 - [Rust Examples](examples/sqlite-parser/README.md)
 - [Python Guide](examples/python-sqlite-parser/README.md)
 - [Go Guide](examples/go-sqlite-parser/README.md)
-- [C# Guide](examples/csharp-json-analyzer/README.md)
 
 ### Module Interface: File-Based Communication
 
@@ -111,9 +107,8 @@ WADUP processes these files immediately when the metadata file is closed (via `f
 - Both metadata and sub-content supported via file-based interface
 - **Zero-copy sub-content**: Data flows from WASM write → nested processing without copying
 
-**Module Patterns:**
-- **Rust/Python/Go** (reactor): Module reused across files, minimal overhead
-- **C#** (command): Module reloaded for each file, ~200ms overhead per file
+**Module Pattern:**
+All WADUP modules use the reactor pattern - they export a `process()` function and are reused across files with minimal overhead.
 
 ### Example: File Size Counter (Rust)
 
@@ -244,11 +239,9 @@ WADUP is designed for efficient processing of many files:
 
 1. **Module Loading** (startup): All `.wasm` files are loaded from the modules directory and compiled once
 2. **Instance Creation** (per thread): Each worker thread creates one instance of each module
-3. **File Processing** (runtime): Module instances handle files based on their pattern:
-   - **Rust/Python/Go** (reactor): Same instance processes all files assigned to that thread
-   - **C#** (command): Fresh instance created for each file
+3. **File Processing** (runtime): Same instance processes all files assigned to that thread (reactor pattern)
 
-**Module Reuse Benefits** (Rust/Python/Go - Reactor Pattern):
+**Module Reuse Benefits**:
 - Module compilation happens once at startup, not per file
 - WASM linear memory persists across files, allowing modules to maintain state if desired
 - For Python modules using CPython, the interpreter is initialized once per thread and reused for all files
@@ -257,13 +250,6 @@ WADUP is designed for efficient processing of many files:
 **Example**: Processing 1000 SQLite databases with the Python module:
 - Without reuse: 1000 × 20ms = 20 seconds wasted on Python initialization
 - With reuse: 1 × 20ms = 20ms total initialization (999× speedup)
-
-**Reload-Per-Call Pattern** (C# - Command Pattern):
-- C# modules use `_start` entry point and reload for each file
-- Ensures clean state between files (no shared memory)
-- .NET runtime initialization is ~200ms per file
-- Uses file-based metadata output (writes to `/metadata/*.json`)
-- Best for processing fewer, larger files where processing time dominates
 
 This architecture makes WADUP suitable for batch processing large numbers of files efficiently.
 
@@ -287,14 +273,6 @@ Language-specific libraries for WASM module authors:
 - File-based metadata output (writes JSON to `/metadata/*.json`)
 - Table builder API: `wadup.NewTableBuilder("name").Column(...).Build()`
 - Value types: `wadup.NewInt64()`, `wadup.NewString()`, `wadup.NewFloat64()`
-
-**guest/csharp** (C#):
-- File-based metadata output (writes JSON to `/metadata/*.json`)
-- File-based sub-content emission (writes JSON to `/subcontent/*.json`)
-- Table builder API: `new TableBuilder("name").AddColumn(...).Build()`
-- Value factory methods: `Value.FromInt64()`, `Value.FromString()`, `Value.FromFloat64()`
-- `MetadataWriter.Flush()` writes and closes metadata files for immediate processing
-- `SubContentWriter.Emit()` / `SubContentWriter.Flush()` for sub-content emission
 
 ### wadup-cli
 Command-line interface for running WADUP processing jobs.
@@ -497,12 +475,6 @@ See the `examples/` directory for working WASM modules:
 **Go Modules:**
 - **go-sqlite-parser**: Parses SQLite databases using pure Go SQLite library
 
-**C# Modules:**
-- **csharp-json-analyzer**: Analyzes JSON structure using System.Text.Json
-  - Demonstrates file-based metadata output
-  - Shows incremental flushing (multiple metadata files per run)
-  - Creates two tables: `json_metadata` and `json_keys`
-
 All examples use the WASI target (`wasm32-wasip1`) to access the virtual filesystem.
 
 ### Building Examples
@@ -626,30 +598,6 @@ Go modules use standard Go (not TinyGo) with `GOOS=wasip1 GOARCH=wasm` target. N
 
 See [examples/go-sqlite-parser/README.md](examples/go-sqlite-parser/README.md) for complete guide, best practices, and what works/doesn't work with Go+WASM.
 
-**C# Modules** (.NET 8 with Wasi.Sdk):
-
-First, install the WASI workload:
-```bash
-dotnet workload install wasi-experimental
-```
-
-Then build:
-```bash
-cd examples/csharp-json-analyzer
-make
-```
-
-**Key Features**:
-- .NET 8 with `Wasi.Sdk` NuGet package
-- `WasmSingleFileBundle` for single .wasm output (~17 MB)
-- File-based metadata output (writes to `/metadata/*.json`)
-- Incremental flushing supported (process metadata immediately on file close)
-- Uses command pattern (module reloaded for each file)
-
-**Important**: C# modules use file-based communication because .NET WASI SDK doesn't support custom WASM imports. The `guest/csharp` library handles JSON serialization and file management.
-
-See [examples/csharp-json-analyzer/README.md](examples/csharp-json-analyzer/README.md) for complete guide and API reference.
-
 ## Development
 
 ### Prerequisites
@@ -662,7 +610,6 @@ See [examples/csharp-json-analyzer/README.md](examples/csharp-json-analyzer/READ
 - **Rust modules**: wasm32-wasip1 target (already installed above)
 - **Python modules**: WASI SDK (auto-downloaded by build script)
 - **Go modules**: Go 1.21+ (WASI support built-in, no extra tools needed)
-- **C# modules**: .NET 8 SDK + WASI workload (`dotnet workload install wasi-experimental`)
 
 ### Building
 
@@ -683,10 +630,6 @@ cd ../sqlite-parser
 
 # For Go modules
 cd ../go-sqlite-parser
-make
-
-# For C# modules
-cd ../csharp-json-analyzer
 make
 ```
 

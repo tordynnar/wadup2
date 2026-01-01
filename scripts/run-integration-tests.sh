@@ -321,22 +321,6 @@ test_python_c_extensions() {
     assert_table_exists "c_extension_imports" || return 1
 }
 
-test_csharp_json_analyzer() {
-    setup_test_env
-    trap cleanup_test_env RETURN
-
-    copy_module "csharp-json-analyzer" || return 1
-
-    # Create test JSON file
-    echo '{"name": "test", "values": [1, 2, 3], "nested": {"a": 1}}' > "$INPUT_DIR/test.json"
-
-    run_wadup > /dev/null || return 1
-
-    assert_table_exists "json_metadata" || return 1
-    assert_table_exists "json_keys" || return 1
-    assert_row_count "json_metadata" 1 || return 1
-}
-
 test_python_multi_file() {
     setup_test_env
     trap cleanup_test_env RETURN
@@ -511,7 +495,6 @@ ALL_TESTS=(
     "test_go_sqlite_parser"
     "test_python_module_reuse"
     "test_python_c_extensions"
-    "test_csharp_json_analyzer"
     "test_python_multi_file"
     "test_simple_module"
     "test_python_lxml"

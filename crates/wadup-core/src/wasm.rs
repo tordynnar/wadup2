@@ -27,16 +27,9 @@ pub struct WasmRuntime {
     limits: ResourceLimits,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ModuleStyle {
-    Reactor,  // Has 'process' export, reusable
-    Command,  // Has '_start' export, needs reload-on-call
-}
-
 pub struct ModuleInfo {
     pub name: String,
     pub module: Module,
-    pub style: ModuleStyle,
 }
 
 impl WasmRuntime {
@@ -77,15 +70,11 @@ impl WasmRuntime {
 
                 let module = crate::precompile::load_module_with_cache(&self.engine, &path)?;
 
-                // Validate module exports and determine style
-                let style = self.validate_module(&module)?;
+                // Validate module exports - must have 'process' function
+                self.validate_module(&module)?;
 
-                let style_str = match style {
-                    ModuleStyle::Reactor => "reactor",
-                    ModuleStyle::Command => "command",
-                };
-                tracing::info!("Loaded WASM module: {} ({})", name, style_str);
-                self.modules.push(ModuleInfo { name, module, style });
+                tracing::info!("Loaded WASM module: {}", name);
+                self.modules.push(ModuleInfo { name, module });
             }
         }
 
@@ -96,18 +85,14 @@ impl WasmRuntime {
         Ok(())
     }
 
-    fn validate_module(&self, module: &Module) -> Result<ModuleStyle> {
+    fn validate_module(&self, module: &Module) -> Result<()> {
         let has_process = module.exports()
             .any(|export| export.name() == "process");
-        let has_start = module.exports()
-            .any(|export| export.name() == "_start");
 
         if has_process {
-            Ok(ModuleStyle::Reactor)
-        } else if has_start {
-            Ok(ModuleStyle::Command)
+            Ok(())
         } else {
-            anyhow::bail!("Module missing required 'process' or '_start' export");
+            anyhow::bail!("Module missing required 'process' export. All WADUP modules must export a 'process' function.");
         }
     }
 
@@ -122,7 +107,6 @@ impl WasmRuntime {
                 &self.engine,
                 &module_info.module,
                 &module_info.name,
-                module_info.style,
                 &self.limits,
                 metadata_store.clone(),
             )?;
@@ -156,14 +140,10 @@ impl ResourceLimiter for ResourceLimiterImpl {
 }
 
 pub struct ModuleInstance {
-    engine: Engine,
-    module: Module,
     store: Store<StoreData>,
     instance: Instance,
     name: String,
-    style: ModuleStyle,
     fuel_limit: Option<u64>,
-    max_memory: Option<usize>,
     metadata_store: MetadataStore,
 }
 
@@ -172,7 +152,6 @@ impl ModuleInstance {
         engine: &Engine,
         module: &Module,
         name: &str,
-        style: ModuleStyle,
         limits: &ResourceLimits,
         metadata_store: MetadataStore,
     ) -> Result<Self> {
@@ -233,14 +212,10 @@ impl ModuleInstance {
         }
 
         Ok(Self {
-            engine: engine.clone(),
-            module: module.clone(),
             store,
             instance,
             name: name.to_string(),
-            style,
             fuel_limit: limits.fuel,
-            max_memory: limits.max_memory,
             metadata_store,
         })
     }
@@ -924,17 +899,6 @@ impl ModuleInstance {
         content_uuid: uuid::Uuid,
         content_data: crate::shared_buffer::SharedBuffer,
     ) -> Result<ProcessingContext> {
-        match self.style {
-            ModuleStyle::Reactor => self.process_content_reactor(content_uuid, content_data),
-            ModuleStyle::Command => self.process_content_command(content_uuid, content_data),
-        }
-    }
-
-    fn process_content_reactor(
-        &mut self,
-        content_uuid: uuid::Uuid,
-        content_data: crate::shared_buffer::SharedBuffer,
-    ) -> Result<ProcessingContext> {
         // Update /data.bin in the in-memory filesystem (zero-copy)
         let filesystem = &self.store.data().wasi_ctx.filesystem;
         filesystem.set_data_bin(content_data.to_bytes())?;
@@ -1021,111 +985,6 @@ impl ModuleInstance {
                     Err(e.into())
                 }
             }
-        }
-    }
-
-    fn process_content_command(
-        &mut self,
-        content_uuid: uuid::Uuid,
-        content_data: crate::shared_buffer::SharedBuffer,
-    ) -> Result<ProcessingContext> {
-        // For command-style modules, we need to reinstantiate the module for each call
-        // Create a new store with fresh context
-        let ctx = ProcessingContext::new(content_uuid, content_data.clone());
-
-        // Create in-memory filesystem with /data.bin set to content
-        let filesystem = Arc::new(MemoryFilesystem::new());
-        filesystem.create_dir_all("/tmp")?;
-        filesystem.create_dir_all("/metadata")?;
-        filesystem.create_dir_all("/subcontent")?;
-        filesystem.create_file("/data.bin", content_data.to_bytes().to_vec())?;
-
-        let wasi_ctx = WasiCtx::new(filesystem.clone());
-
-        // Create resource limiter if memory limit is specified
-        let resource_limiter = self.max_memory.map(|max_memory| {
-            ResourceLimiterImpl { max_memory }
-        });
-
-        let store_data = StoreData {
-            processing_ctx: ctx,
-            wasi_ctx,
-            resource_limiter,
-        };
-
-        let mut store = Store::new(&self.engine, store_data);
-
-        // Set fuel limit if specified
-        if let Some(fuel) = self.fuel_limit {
-            store.set_fuel(fuel)?;
-        }
-
-        // Set memory limits if specified
-        if store.data().resource_limiter.is_some() {
-            store.limiter(|data| data.resource_limiter.as_mut().unwrap());
-        }
-
-        // Create a new linker
-        let mut linker = Linker::new(&self.engine);
-        Self::add_wasi_functions(&mut linker)?;
-
-        // Instantiate the module fresh
-        let instance = linker.instantiate(&mut store, &self.module)?;
-
-        // Call _start - try () -> i32 first, then () -> () for compatibility
-        let result = if let Ok(start_func) = instance.get_typed_func::<(), i32>(&mut store, "_start") {
-            start_func.call(&mut store, ()).map(|code| code)
-        } else if let Ok(start_func) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
-            start_func.call(&mut store, ()).map(|_| 0)
-        } else {
-            anyhow::bail!("Module '{}' _start function has unsupported signature", self.name);
-        };
-
-        // Check result - treat proc_exit(0) as success
-        let exit_code = match &result {
-            Ok(code) => *code,
-            Err(e) if e.to_string().contains("proc_exit called with code 0") => 0,
-            Err(e) => {
-                let error_msg = e.to_string();
-                if error_msg.contains("fuel") || error_msg.contains("out of fuel") {
-                    anyhow::bail!("Module '{}' exceeded fuel limit (CPU limit)", self.name)
-                } else if error_msg.contains("stack overflow") {
-                    anyhow::bail!("Module '{}' stack overflow", self.name)
-                } else if error_msg.contains("memory") {
-                    anyhow::bail!("Module '{}' memory limit exceeded", self.name)
-                } else {
-                    return Err(anyhow::anyhow!("{}", error_msg));
-                }
-            }
-        };
-
-        if exit_code == 0 {
-            // Debug output to show _start completed
-            eprintln!("WADUP: _start completed, checking for remaining metadata files");
-
-            // Success - process any remaining metadata files that weren't closed before _start returned
-            Self::process_remaining_metadata_files(&filesystem, &mut store)?;
-
-            // Capture stdout/stderr before extracting context
-            let (stdout, stdout_truncated) = store.data().wasi_ctx.take_stdout();
-            let (stderr, stderr_truncated) = store.data().wasi_ctx.take_stderr();
-
-            // Extract context
-            let ctx = &mut store.data_mut().processing_ctx;
-            let extracted = ProcessingContext {
-                content_uuid: ctx.content_uuid,
-                content_data: ctx.content_data.clone(),
-                subcontent: std::mem::take(&mut ctx.subcontent),
-                metadata: std::mem::take(&mut ctx.metadata),
-                table_schemas: std::mem::take(&mut ctx.table_schemas),
-                stdout: if stdout.is_empty() { None } else { Some(stdout) },
-                stderr: if stderr.is_empty() { None } else { Some(stderr) },
-                stdout_truncated,
-                stderr_truncated,
-            };
-            Ok(extracted)
-        } else {
-            anyhow::bail!("Module '{}' returned error code: {}", self.name, exit_code)
         }
     }
 

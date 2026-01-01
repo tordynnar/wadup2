@@ -153,40 +153,6 @@ build_go_module() {
     fi
 }
 
-build_csharp_module() {
-    local name="$1"
-    local wasm_file="$WADUP_ROOT/examples/$name/target/${name//-/_}.wasm"
-
-    if [[ "$FORCE" == "false" && -f "$wasm_file" ]]; then
-        print_info "Skipping $name (already built)"
-        record_timing "$name" "0 (cached)"
-        return 0
-    fi
-
-    local start=$(python3 -c "import time; print(time.time())")
-
-    (
-        cd "$WADUP_ROOT/examples/$name"
-        mkdir -p target
-
-        dotnet publish -c Release -o publish 2>&1
-        cp "publish/${name}.wasm" "target/${name//-/_}.wasm"
-    ) 2>&1
-
-    local end=$(python3 -c "import time; print(time.time())")
-    local duration=$(python3 -c "print(f'{$end - $start:.2f}')")
-
-    if [[ -f "$wasm_file" ]]; then
-        local size=$(du -h "$wasm_file" | cut -f1)
-        print_success "$name built in ${duration}s ($size)"
-        record_timing "$name" "$duration"
-    else
-        print_error "$name build failed"
-        record_timing "$name" "$duration (FAILED)"
-        return 1
-    fi
-}
-
 print_timing_table() {
     echo ""
     echo -e "${BLUE}============================================================${NC}"
@@ -236,9 +202,6 @@ build_rust_module "simple-test"
 print_header "Building Go Modules"
 build_go_module "go-sqlite-parser"
 
-print_header "Building C# Modules"
-build_csharp_module "csharp-json-analyzer"
-
 print_header "Building Python Modules"
 build_python_module "python-sqlite-parser"
 build_python_module "python-counter"
@@ -271,9 +234,6 @@ precompile_modules "$WADUP_ROOT/examples/simple-test/target/wasm32-wasip1/releas
 
 # Go modules
 precompile_modules "$WADUP_ROOT/examples/go-sqlite-parser/target"
-
-# C# modules
-precompile_modules "$WADUP_ROOT/examples/csharp-json-analyzer/target"
 
 # Python modules
 precompile_modules "$WADUP_ROOT/examples/python-sqlite-parser/target"
