@@ -1,6 +1,88 @@
 use std::path::PathBuf;
 use std::process::Command;
 use std::fs;
+use std::time::{Duration, Instant};
+use std::sync::Mutex;
+
+// Global timing collection
+static TIMINGS: Mutex<Vec<TestTiming>> = Mutex::new(Vec::new());
+
+#[allow(dead_code)]
+struct TestTiming {
+    name: String,
+    duration: Duration,
+}
+
+/// RAII guard that records test timing when dropped
+struct TestTimer {
+    name: String,
+    start: Instant,
+}
+
+impl TestTimer {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            start: Instant::now(),
+        }
+    }
+}
+
+impl Drop for TestTimer {
+    fn drop(&mut self) {
+        let duration = self.start.elapsed();
+        let timing = TestTiming {
+            name: self.name.clone(),
+            duration,
+        };
+
+        // Record timing
+        if let Ok(mut timings) = TIMINGS.lock() {
+            timings.push(timing);
+        }
+
+        // Print individual timing
+        println!("⏱️  {} completed in {:.2}s", self.name, duration.as_secs_f64());
+    }
+}
+
+/// Print a summary table of all test timings (call at end of last test)
+fn print_timing_summary() {
+    if let Ok(timings) = TIMINGS.lock() {
+        if timings.is_empty() {
+            return;
+        }
+
+        println!("\n{}", "=".repeat(60));
+        println!("  INTEGRATION TEST TIMING SUMMARY");
+        println!("{}\n", "=".repeat(60));
+
+        // Find max name length for formatting
+        let max_name_len = timings.iter().map(|t| t.name.len()).max().unwrap_or(30).max(30);
+
+        // Sort by duration (slowest first)
+        let mut sorted: Vec<_> = timings.iter().collect();
+        sorted.sort_by(|a, b| b.duration.cmp(&a.duration));
+
+        // Print header
+        println!("  {:<width$}  {:>10}", "Test Name", "Duration", width = max_name_len);
+        println!("  {:-<width$}  {:->10}", "", "", width = max_name_len);
+
+        // Print each timing
+        let mut total = Duration::ZERO;
+        for timing in &sorted {
+            let secs = timing.duration.as_secs_f64();
+            total += timing.duration;
+            println!("  {:<width$}  {:>9.2}s", timing.name, secs, width = max_name_len);
+        }
+
+        // Print total
+        println!("  {:-<width$}  {:->10}", "", "", width = max_name_len);
+        println!("  {:<width$}  {:>9.2}s", "TOTAL", total.as_secs_f64(), width = max_name_len);
+        println!("\n  Tests completed: {}", timings.len());
+        println!("{}\n", "=".repeat(60));
+    }
+}
 
 fn workspace_root() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -94,6 +176,8 @@ fn setup_modules_dir(modules: &[&str]) -> tempfile::TempDir {
 
 #[test]
 fn test_sqlite_parser() {
+    let _timer = TestTimer::new("test_sqlite_parser");
+
     // Build the CLI
     let status = Command::new("cargo")
         .args(&["build", "--release"])
@@ -142,6 +226,8 @@ fn test_sqlite_parser() {
 
 #[test]
 fn test_zip_extractor_and_byte_counter() {
+    let _timer = TestTimer::new("test_zip_extractor_and_byte_counter");
+
     // Build the CLI
     let status = Command::new("cargo")
         .args(&["build", "--release"])
@@ -202,6 +288,8 @@ fn test_zip_extractor_and_byte_counter() {
 
 #[test]
 fn test_combined_sqlite_and_zip() {
+    let _timer = TestTimer::new("test_combined_sqlite_and_zip");
+
     // Build the CLI
     let status = Command::new("cargo")
         .args(&["build", "--release"])
@@ -356,6 +444,7 @@ fn build_csharp_module(module_name: &str) -> PathBuf {
 
 #[test]
 fn test_python_sqlite_parser() {
+    let _timer = TestTimer::new("test_python_sqlite_parser");
     // Build the CLI
     let status = Command::new("cargo")
         .args(&["build", "--release"])
@@ -428,6 +517,7 @@ fn test_python_sqlite_parser() {
 
 #[test]
 fn test_go_sqlite_parser() {
+    let _timer = TestTimer::new("test_go_sqlite_parser");
     // Build the CLI
     let status = Command::new("cargo")
         .args(&["build", "--release"])
@@ -500,6 +590,7 @@ fn test_go_sqlite_parser() {
 
 #[test]
 fn test_python_module_reuse() {
+    let _timer = TestTimer::new("test_python_module_reuse");
     // This test verifies that Python modules are loaded once and reused across
     // multiple files, rather than being re-initialized for each file.
     // The python-counter module maintains a global counter that increments
@@ -571,6 +662,7 @@ fn test_python_module_reuse() {
 
 #[test]
 fn test_python_c_extensions() {
+    let _timer = TestTimer::new("test_python_c_extensions");
     // Build the CLI
     let status = Command::new("cargo")
         .args(&["build", "--release"])
@@ -667,6 +759,7 @@ fn test_python_c_extensions() {
 
 #[test]
 fn test_csharp_json_analyzer() {
+    let _timer = TestTimer::new("test_csharp_json_analyzer");
     // Build the CLI
     let status = Command::new("cargo")
         .args(&["build", "--release"])
@@ -831,6 +924,7 @@ fn test_csharp_json_analyzer() {
 
 #[test]
 fn test_python_multi_file() {
+    let _timer = TestTimer::new("test_python_multi_file");
     // This test verifies:
     // 1. Multiple Python source files in a project work correctly
     // 2. Pure-Python dependencies (chardet, humanize, python-slugify) are bundled and importable
@@ -948,6 +1042,7 @@ fn test_python_multi_file() {
 
 #[test]
 fn test_simple_module() {
+    let _timer = TestTimer::new("test_simple_module");
     // This test verifies that the simplest possible Rust module can load and run.
     // The simple-test module just returns 0 (success) without emitting any metadata.
 
@@ -997,6 +1092,7 @@ fn test_simple_module() {
 
 #[test]
 fn test_python_lxml() {
+    let _timer = TestTimer::new("test_python_lxml");
     // This test verifies that the lxml C extension works correctly in Python WASI.
     // The python-lxml-test module parses XML and outputs elements to a table.
 
@@ -1096,6 +1192,7 @@ fn test_python_lxml() {
 
 #[test]
 fn test_python_numpy() {
+    let _timer = TestTimer::new("test_python_numpy");
     // This test verifies that NumPy C extensions work correctly in Python WASI.
     // The python-numpy-test module creates arrays and performs basic operations.
 
@@ -1175,6 +1272,7 @@ fn test_python_numpy() {
 
 #[test]
 fn test_python_pandas() {
+    let _timer = TestTimer::new("test_python_pandas");
     // This test verifies that Pandas works correctly in Python WASI.
     // The python-pandas-test module creates DataFrames and performs aggregations.
 
@@ -1255,6 +1353,7 @@ fn test_python_pandas() {
 
 #[test]
 fn test_python_pydantic() {
+    let _timer = TestTimer::new("test_python_pydantic");
     // This test verifies that the full pydantic library (BaseModel, Field, etc.) works
     // in Python WASI with an increased stack size.
     //
@@ -1381,4 +1480,27 @@ fn test_python_pydantic() {
     println!("  - pydantic_core version: {}", pydantic_core_version);
     println!("  - users created: {} (Alice, Bob, Claude)", user_count);
     println!("  - BaseModel with Field constraints working");
+}
+
+#[test]
+fn z_timing_summary() {
+    // This test prints the timing summary after waiting for all other tests to complete.
+    // We expect 14 other tests, so wait until we have collected all timings.
+    const EXPECTED_TESTS: usize = 14;
+    const MAX_WAIT_SECS: u64 = 300; // 5 minutes max wait
+
+    let start = std::time::Instant::now();
+    loop {
+        let count = TIMINGS.lock().map(|t| t.len()).unwrap_or(0);
+        if count >= EXPECTED_TESTS {
+            break;
+        }
+        if start.elapsed().as_secs() > MAX_WAIT_SECS {
+            println!("Warning: Timed out waiting for all tests. Got {} of {} expected.", count, EXPECTED_TESTS);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    print_timing_summary();
 }
