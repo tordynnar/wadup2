@@ -1,0 +1,8 @@
+[project]
+name = "test-pandas"
+version = "0.1.0"
+dependencies = ["pandas", "numpy"]
+
+[tool.wadup]
+entry-point = "main"
+c-extensions = ["numpy", "pandas"]

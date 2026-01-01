@@ -278,9 +278,107 @@ wasmtime run --dir /tmp/wasi-root::/ target/test_pandas.wasm
 3. **Test Python free-threading** - Build Python 3.13 with `--disable-gil`
 4. **Upstream discussion** - Engage with CPython and Cython maintainers about WASI support
 
+## Pyodide (Emscripten) Research Findings
+
+Pyodide successfully runs pandas under WASM (Emscripten). Research into their approach reveals key differences from WASI.
+
+### Key Findings
+
+**1. Pandas has NO patches in Pyodide**
+
+Surprisingly, pandas requires no source patches. The `pyodide-recipes/packages/pandas/meta.yaml` is minimal:
+```yaml
+package:
+  name: pandas
+  version: 2.3.3
+requirements:
+  host: [numpy]
+  run: [numpy, python-dateutil, pytz]
+```
+
+**2. Pyodide uses `PyThreadState_Swap` instead of `_PyThreadState_Attach`**
+
+The critical difference is in thread state management. Pyodide's `src/core/stack_switching/pystate.c`:
+
+```c
+// Pyodide approach (works in WASM)
+res->ts = PyThreadState_Swap(tstate);
+
+// Modern CPython 3.13+ approach (fails in WASI)
+_PyThreadState_Attach(tstate);  // Called by PyEval_RestoreThread
+```
+
+- `PyThreadState_Swap` - Simple pointer swap, no GIL operations
+- `_PyThreadState_Attach` - Involves GIL acquire/release requiring threading primitives
+
+**3. Emscripten exports threading functions**
+
+Pyodide exports `_PyEval_SaveThread` and `_PyEval_RestoreThread` and uses them from JavaScript for GIL management. The functions work because Emscripten provides proper stubs for threading primitives.
+
+**4. WASI lacks proper threading stubs**
+
+The `_PyThreadState_Attach` function in modern CPython:
+```c
+void _PyThreadState_Attach(PyThreadState *tstate) {
+    if (current_fast_get() != NULL) {
+        Py_FatalError("non-NULL old thread state");  // <-- Our crash
+    }
+    // ... acquire GIL, set thread state ...
+}
+```
+
+In WASI, the threading primitives don't work correctly, causing state tracking to fail.
+
+### Root Cause Comparison
+
+| Platform | Thread API | GIL Handling | Result |
+|----------|-----------|--------------|--------|
+| Emscripten | `PyThreadState_Swap` | Exported, proper stubs | Works |
+| WASI | `_PyThreadState_Attach` | Missing stubs | Crashes |
+
+### Recommended Solution for WASI
+
+Based on Pyodide's approach, the fix is to **stub the threading operations at the CPython level**:
+
+**Option A: Stub at Python build time** (Recommended)
+
+Patch CPython's `Python/ceval_gil.c` for WASI builds:
+```c
+#ifdef __wasi__
+PyThreadState *PyEval_SaveThread(void) {
+    return _PyThreadState_GET();  // Just return current state
+}
+
+void PyEval_RestoreThread(PyThreadState *tstate) {
+    // No-op in WASI
+}
+#else
+// ... normal implementation ...
+#endif
+```
+
+**Option B: Stub at compile time**
+
+Add to WASI CFLAGS:
+```bash
+-DPy_BEGIN_ALLOW_THREADS='{ PyThreadState *_save = NULL; (void)_save;'
+-DPy_END_ALLOW_THREADS='}'
+```
+
+This makes the `nogil` blocks syntactically valid but no-ops.
+
+### Why This Wasn't Needed for NumPy
+
+NumPy works because:
+1. We use `-DNDEBUG` to disable `assert(PyGILState_Check())`
+2. NumPy's nogil operations don't nest deeply during import
+3. Pandas has more complex module initialization that triggers the issue
+
 ## References
 
 - [CPython WASI Support](https://github.com/python/cpython/tree/main/Tools/wasm)
+- [Pyodide Thread State Management](https://github.com/pyodide/pyodide/blob/main/src/core/stack_switching/pystate.c)
+- [CPython Threading API](https://docs.python.org/3/c-api/init.html#thread-state-and-the-global-interpreter-lock)
 - [Cython Threading Documentation](https://cython.readthedocs.io/en/latest/src/userguide/parallelism.html)
 - [WASI Threading Proposal](https://github.com/WebAssembly/wasi-threads)
 - [Python GIL Removal PEP 703](https://peps.python.org/pep-0703/)

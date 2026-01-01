@@ -69,6 +69,11 @@ fi
 tar xf "$PYTHON_TARBALL"
 cd "Python-${PYTHON_VERSION}"
 
+# Apply WASI-specific patches
+echo "Applying WASI threading patches..."
+patch -p1 < "$SCRIPT_DIR/patches/cpython-wasi-threading.patch"
+patch -p1 < "$SCRIPT_DIR/patches/cpython-wasi-gilstate.patch"
+
 # Enable frozen stdlib modules (required for WASI without filesystem)
 echo "Enabling frozen stdlib modules..."
 
@@ -105,6 +110,7 @@ if "'stdlib - comprehensive'" not in content:
         '<email.*>',
         'enum',
         'fnmatch',
+        'glob',
         'functools',
         'gettext',
         'dis',
@@ -156,19 +162,21 @@ if "'stdlib - comprehensive'" not in content:
         'struct',
         '<sysconfig.*>',
         'tarfile',
+        'tempfile',
         'textwrap',
         'threading',
         '<tomllib.*>',
         'traceback',
         'types',
         'typing',
-        'urllib.parse',
+        '<urllib.*>',
         'uuid',
         'warnings',
         'weakref',
         '_weakrefset',
         '<xml.*>',
         '<zipfile.*>',
+        '<zipfile._path.*>',
         '<zoneinfo.*>',
     ]),
 """

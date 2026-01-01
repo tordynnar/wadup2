@@ -99,6 +99,9 @@ def parse_pyproject(project_dir: Path) -> tuple[str, str, list[str], list[str]]:
 
 def download_dependencies(dependencies: list[str], deps_dir: Path) -> None:
     """Download dependencies as source distributions."""
+    if not dependencies:
+        return  # Nothing to download
+
     result = subprocess.run(
         ["pip", "download", "--no-binary", ":all:", "-d", str(deps_dir)] + dependencies,
         capture_output=True,
@@ -122,9 +125,17 @@ def extract_archive(archive_path: Path, extract_dir: Path) -> None:
             zf.extractall(extract_dir)
 
 
-def copy_package_from_dir(pkg_dir: Path, bundle_dir: Path) -> None:
-    """Copy Python packages from an extracted dependency directory."""
+def copy_package_from_dir(pkg_dir: Path, bundle_dir: Path, skip_packages: list[str] = None) -> None:
+    """Copy Python packages from an extracted dependency directory.
+
+    Args:
+        pkg_dir: Directory containing extracted package source
+        bundle_dir: Destination bundle directory
+        skip_packages: List of package names to skip if they already exist
+                       (used to prevent overwriting pre-built C extensions)
+    """
     skip_dirs = {'tests', 'test', 'docs', 'examples'}
+    skip_packages = set(p.lower() for p in (skip_packages or []))
     found_something = False
 
     # Try src/ layout first (e.g., attrs uses src/attr/)
@@ -133,6 +144,9 @@ def copy_package_from_dir(pkg_dir: Path, bundle_dir: Path) -> None:
         for subpkg in src_dir.iterdir():
             if subpkg.is_dir() and (subpkg / "__init__.py").exists():
                 dest = bundle_dir / subpkg.name
+                # Skip if this is a C extension we've already bundled
+                if dest.exists() and subpkg.name.lower() in skip_packages:
+                    continue
                 if dest.exists():
                     shutil.rmtree(dest)
                 shutil.copytree(subpkg, dest)
@@ -154,6 +168,9 @@ def copy_package_from_dir(pkg_dir: Path, bundle_dir: Path) -> None:
                     continue
 
                 dest = bundle_dir / subpkg.name
+                # Skip if this is a C extension we've already bundled
+                if dest.exists() and subpkg.name.lower() in skip_packages:
+                    continue
                 if dest.exists():
                     shutil.rmtree(dest)
                 shutil.copytree(subpkg, dest)
@@ -419,13 +436,14 @@ def main() -> int:
                     extract_archive(archive, deps_temp)
 
             # Copy extracted packages to bundle
+            # Skip C extensions since we bundle pre-built versions
             for pkg_dir in deps_temp.iterdir():
                 if not pkg_dir.is_dir():
                     continue
                 if pkg_dir.suffix in ('.tar', '.gz', '.zip'):
                     continue
 
-                copy_package_from_dir(pkg_dir, bundle_dir)
+                copy_package_from_dir(pkg_dir, bundle_dir, skip_packages=c_extensions)
 
             # Also check for wheel files
             for wheel in deps_temp.glob("*.whl"):
@@ -529,6 +547,18 @@ def main() -> int:
         # Pandas uses khash which has inline functions that can cause duplicate symbols
         if "pandas" in resolved_extensions:
             link_cmd.insert(1, "-Wl,--allow-multiple-definition")
+
+        # C++ runtime for extensions that use exceptions (e.g., pandas aggregations)
+        needs_cxx_runtime = any(
+            EXTENSIONS.get(ext, {}).get("requires_cxx_runtime", False)
+            for ext in resolved_extensions
+        )
+        if needs_cxx_runtime:
+            wasi_lib_dir = wasi_sysroot / "lib" / "wasm32-wasi"
+            link_cmd.extend([
+                str(wasi_lib_dir / "libc++.a"),
+                str(wasi_lib_dir / "libc++abi.a"),
+            ])
 
         result = subprocess.run(link_cmd, cwd=build_dir)
         if result.returncode != 0:

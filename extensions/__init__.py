@@ -81,6 +81,9 @@ EXTENSIONS = {
             ("pandas._libs.byteswap", "PyInit_byteswap"),
             ("pandas._libs.sas", "PyInit_sas"),
             ("pandas._libs.json", "PyInit_json"),
+            # pandas._libs.window modules
+            ("pandas._libs.window.aggregations", "PyInit_aggregations"),
+            ("pandas._libs.window.indexers", "PyInit_indexers"),
             # pandas._libs.tslibs modules
             ("pandas._libs.tslibs.base", "PyInit_base"),
             ("pandas._libs.tslibs.ccalendar", "PyInit_ccalendar"),
@@ -103,6 +106,8 @@ EXTENSIONS = {
             "wasi-pandas/lib/libpandas_libs.a",
             "wasi-pandas/lib/libpandas_tslibs.a",
         ],
+        # C++ runtime needed for aggregations module (uses exceptions)
+        "requires_cxx_runtime": True,
         "python_dirs": [
             "wasi-pandas/python/pandas",
         ],
