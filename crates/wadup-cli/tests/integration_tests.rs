@@ -1252,3 +1252,120 @@ fn test_python_pandas() {
     println!("  - DataFrame: {} rows x {} columns", input_rows, input_cols);
     println!("  - Columns: {}", column_names);
 }
+
+#[test]
+fn test_python_pydantic() {
+    // This test verifies that pydantic_core (Rust extension) works correctly in Python WASI.
+    // The python-pydantic-test module uses SchemaValidator and SchemaSerializer.
+
+    // Build the CLI
+    let status = Command::new("cargo")
+        .args(&["build", "--release"])
+        .current_dir(workspace_root())
+        .status()
+        .expect("Failed to build wadup CLI");
+    assert!(status.success(), "CLI build failed");
+
+    // Build Python pydantic module
+    let python_wasm = build_python_module("python-pydantic-test");
+
+    // Setup modules directory
+    let modules_dir = tempfile::tempdir().unwrap();
+    let dest = modules_dir.path().join("python_pydantic_test.wasm");
+    fs::copy(&python_wasm, &dest).unwrap();
+
+    // Setup input directory with a test file
+    let input_dir = tempfile::tempdir().unwrap();
+    fs::write(input_dir.path().join("test.txt"), "test data").unwrap();
+
+    // Setup output database
+    let output_dir = tempfile::tempdir().unwrap();
+    let output_db = output_dir.path().join("output.db");
+
+    // Run wadup
+    let status = Command::new(wadup_binary())
+        .args(&[
+            "--modules", modules_dir.path().to_str().unwrap(),
+            "--input", input_dir.path().to_str().unwrap(),
+            "--output", output_db.to_str().unwrap(),
+        ])
+        .status()
+        .expect("Failed to run wadup");
+
+    assert!(status.success(), "wadup execution failed");
+
+    // Verify results
+    let conn = rusqlite::Connection::open(&output_db).unwrap();
+
+    // Check that info table exists and has version
+    let table_exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='info'",
+        [],
+        |row| row.get::<_, i64>(0)
+    ).unwrap() > 0;
+    assert!(table_exists, "info table not created");
+
+    // Get pydantic_core version
+    let pydantic_version: String = conn.query_row(
+        "SELECT value FROM info WHERE key = 'pydantic_core_version'",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert!(!pydantic_version.is_empty(), "pydantic_core version should be detected");
+
+    // Check validation_results table
+    let validation_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM validation_results",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert!(validation_count >= 10, "Expected at least 10 validation results, got {}", validation_count);
+
+    // Verify validation worked - check for specific results
+    // String "hello world" should validate successfully
+    let string_valid: i64 = conn.query_row(
+        "SELECT valid FROM validation_results WHERE input_type = 'string' AND input_value = 'hello world'",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(string_valid, 1, "String 'hello world' should be valid");
+
+    // Int 42 should validate successfully
+    let int_valid: i64 = conn.query_row(
+        "SELECT valid FROM validation_results WHERE input_type = 'int' AND input_value = '42'",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(int_valid, 1, "Int 42 should be valid");
+
+    // "not an int" should fail validation
+    let invalid_int: i64 = conn.query_row(
+        "SELECT valid FROM validation_results WHERE input_type = 'int' AND input_value = 'not an int'",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(invalid_int, 0, "'not an int' should fail int validation");
+
+    // Check serialization_results table
+    let serialization_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM serialization_results",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert!(serialization_count >= 4, "Expected at least 4 serialization results, got {}", serialization_count);
+
+    // Verify JSON serialization worked
+    let int_json: String = conn.query_row(
+        "SELECT json_output FROM serialization_results WHERE schema = 'int' AND input = '42'",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(int_json, "42", "Int 42 should serialize to '42'");
+
+    println!("✓ Python pydantic_core test verified:");
+    println!("  - pydantic_core version: {}", pydantic_version);
+    println!("  - Validation results: {}", validation_count);
+    println!("  - Serialization results: {}", serialization_count);
+    println!("  - SchemaValidator working correctly");
+    println!("  - SchemaSerializer producing JSON");
+}

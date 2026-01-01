@@ -9,6 +9,23 @@ Each extension defines:
 """
 
 EXTENSIONS = {
+    "pydantic": {
+        "modules": [
+            # The core Rust extension
+            ("_pydantic_core", "PyInit__pydantic_core"),
+        ],
+        "libraries": [
+            "wasi-pydantic/lib/lib_pydantic_core.a",
+        ],
+        "python_dirs": [
+            "wasi-pydantic/python/pydantic_core",
+        ],
+        "dependencies": [],
+        "validation": [
+            "wasi-pydantic/lib/lib_pydantic_core.a",
+        ],
+    },
+
     "lxml": {
         "modules": [
             ("lxml.etree", "PyInit_etree"),

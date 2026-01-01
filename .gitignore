@@ -27,11 +27,13 @@ examples/python-*/src/script.py.h
 examples/python-*/target/
 
 # Test outputs
-test-output.db
-test-output.db-shm
-test-output.db-wal
 test-modules/
 test-input/
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
 
 # IDE
 .vscode/
