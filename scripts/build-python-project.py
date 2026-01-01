@@ -32,6 +32,7 @@ from extensions import (
     get_all_modules,
     get_all_libraries,
     get_all_python_dirs,
+    get_all_python_files,
     get_validation_files,
 )
 
@@ -396,6 +397,15 @@ def main() -> int:
                 pkg_name = src_path.name
                 print_info(f"Bundling {pkg_name} Python files...")
                 shutil.copytree(src_path, bundle_dir / pkg_name)
+
+            # Also copy single-file Python modules (like typing_extensions.py)
+            ext_python_files = get_all_python_files(c_extensions)
+            for ext_python_file in ext_python_files:
+                # ext_python_file is like "wasi-pydantic/python/typing_extensions.py"
+                src_path = deps_dir / ext_python_file
+                if src_path.exists():
+                    print_info(f"Bundling {src_path.name}...")
+                    shutil.copy(src_path, bundle_dir / src_path.name)
 
         # Copy WASI Python stubs (sysconfigdata, numpy.random stubs, etc.)
         # These are copied AFTER C extension Python files so stubs can override/augment

@@ -1255,11 +1255,11 @@ fn test_python_pandas() {
 
 #[test]
 fn test_python_pydantic() {
-    // This test verifies that pydantic_core (Rust extension) works correctly in Python WASI.
-    // The python-pydantic-test module uses SchemaValidator and SchemaSerializer.
+    // This test verifies that the full pydantic library (BaseModel, Field, etc.) works
+    // in Python WASI with an increased stack size.
     //
-    // Note: The full pydantic library (BaseModel) requires complex imports that exceed
-    // WASI stack limits. Use pydantic_core directly for WASI modules.
+    // The pydantic library has deep import chains that require a larger stack than
+    // the default WASI limits. We use --max-stack to increase it.
 
     // Build the CLI
     let status = Command::new("cargo")
@@ -1285,22 +1285,28 @@ fn test_python_pydantic() {
     let output_dir = tempfile::tempdir().unwrap();
     let output_db = output_dir.path().join("output.db");
 
-    // Run wadup
-    let status = Command::new(wadup_binary())
+    // Run wadup with increased stack size for pydantic's deep import chain
+    // 8MB stack should be sufficient for pydantic's imports
+    let output = Command::new(wadup_binary())
         .args(&[
             "--modules", modules_dir.path().to_str().unwrap(),
             "--input", input_dir.path().to_str().unwrap(),
             "--output", output_db.to_str().unwrap(),
+            "--max-stack", "8388608",  // 8MB stack
         ])
-        .status()
+        .output()
         .expect("Failed to run wadup");
 
-    assert!(status.success(), "wadup execution failed");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        panic!("wadup execution failed:\nstderr: {}\nstdout: {}", stderr, stdout);
+    }
 
     // Verify results
     let conn = rusqlite::Connection::open(&output_db).unwrap();
 
-    // Check that info table exists and has version
+    // Check that info table exists and has import status
     let table_exists: bool = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='info'",
         [],
@@ -1308,13 +1314,29 @@ fn test_python_pydantic() {
     ).unwrap() > 0;
     assert!(table_exists, "info table not created");
 
-    // Get pydantic_core version
+    // Check import status
+    let import_status: String = conn.query_row(
+        "SELECT value FROM info WHERE key = 'import_status'",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(import_status, "success", "pydantic import should succeed with increased stack");
+
+    // Get pydantic version (high-level library)
     let pydantic_version: String = conn.query_row(
+        "SELECT value FROM info WHERE key = 'pydantic_version'",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert!(!pydantic_version.is_empty(), "pydantic version should be detected");
+
+    // Get pydantic_core version
+    let pydantic_core_version: String = conn.query_row(
         "SELECT value FROM info WHERE key = 'pydantic_core_version'",
         [],
         |row| row.get(0)
     ).unwrap();
-    assert!(!pydantic_version.is_empty(), "pydantic_core version should be detected");
+    assert!(!pydantic_core_version.is_empty(), "pydantic_core version should be detected");
 
     // Check validation_results table
     let validation_count: i64 = conn.query_row(
@@ -1322,53 +1344,47 @@ fn test_python_pydantic() {
         [],
         |row| row.get(0)
     ).unwrap();
-    assert!(validation_count >= 10, "Expected at least 10 validation results, got {}", validation_count);
+    assert!(validation_count >= 7, "Expected at least 7 validation results, got {}", validation_count);
 
     // Verify validation worked - check for specific results
-    // String "hello world" should validate successfully
-    let string_valid: i64 = conn.query_row(
-        "SELECT valid FROM validation_results WHERE input_type = 'string' AND input_value = 'hello world'",
+    // Person with valid data should pass
+    let person_valid: i64 = conn.query_row(
+        "SELECT valid FROM validation_results WHERE model_name = 'Person' AND input_data LIKE '%Alice%'",
         [],
         |row| row.get(0)
     ).unwrap();
-    assert_eq!(string_valid, 1, "String 'hello world' should be valid");
+    assert_eq!(person_valid, 1, "Person 'Alice' should be valid");
 
-    // Int 42 should validate successfully
-    let int_valid: i64 = conn.query_row(
-        "SELECT valid FROM validation_results WHERE input_type = 'int' AND input_value = '42'",
+    // Person with age = -5 should fail (ge=0 constraint)
+    let person_invalid_age: i64 = conn.query_row(
+        "SELECT valid FROM validation_results WHERE model_name = 'Person' AND input_data LIKE '%Charlie%'",
         [],
         |row| row.get(0)
     ).unwrap();
-    assert_eq!(int_valid, 1, "Int 42 should be valid");
+    assert_eq!(person_invalid_age, 0, "Person 'Charlie' with age=-5 should fail validation");
 
-    // "not an int" should fail validation
-    let invalid_int: i64 = conn.query_row(
-        "SELECT valid FROM validation_results WHERE input_type = 'int' AND input_value = 'not an int'",
+    // Address with invalid zip_code should fail
+    let address_invalid: i64 = conn.query_row(
+        "SELECT valid FROM validation_results WHERE model_name = 'Address' AND input_data LIKE '%invalid%'",
         [],
         |row| row.get(0)
     ).unwrap();
-    assert_eq!(invalid_int, 0, "'not an int' should fail int validation");
+    assert_eq!(address_invalid, 0, "Address with invalid zip_code should fail");
 
-    // Check serialization_results table
-    let serialization_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM serialization_results",
+    // Company with nested employees should work
+    let company_valid: i64 = conn.query_row(
+        "SELECT valid FROM validation_results WHERE model_name = 'Company'",
         [],
         |row| row.get(0)
     ).unwrap();
-    assert!(serialization_count >= 4, "Expected at least 4 serialization results, got {}", serialization_count);
+    assert_eq!(company_valid, 1, "Company with nested employees should be valid");
 
-    // Verify JSON serialization worked
-    let int_json: String = conn.query_row(
-        "SELECT json_output FROM serialization_results WHERE schema = 'int' AND input = '42'",
-        [],
-        |row| row.get(0)
-    ).unwrap();
-    assert_eq!(int_json, "42", "Int 42 should serialize to '42'");
-
-    println!("✓ Python pydantic_core test verified:");
-    println!("  - pydantic_core version: {}", pydantic_version);
+    println!("✓ Python pydantic (BaseModel) test verified:");
+    println!("  - pydantic version: {}", pydantic_version);
+    println!("  - pydantic_core version: {}", pydantic_core_version);
+    println!("  - Import status: {}", import_status);
     println!("  - Validation results: {}", validation_count);
-    println!("  - Serialization results: {}", serialization_count);
-    println!("  - SchemaValidator working correctly");
-    println!("  - SchemaSerializer producing JSON");
+    println!("  - BaseModel validation working correctly");
+    println!("  - Field constraints (ge, le, pattern) enforced");
+    println!("  - Nested models (Company with Person list) working");
 }

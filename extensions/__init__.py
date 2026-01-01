@@ -19,6 +19,13 @@ EXTENSIONS = {
         ],
         "python_dirs": [
             "wasi-pydantic/python/pydantic_core",
+            "wasi-pydantic/python/pydantic",
+            "wasi-pydantic/python/annotated_types",
+            "wasi-pydantic/python/typing_inspection",
+        ],
+        "python_files": [
+            # Single-file modules (not packages)
+            "wasi-pydantic/python/typing_extensions.py",
         ],
         "dependencies": [],
         "validation": [
@@ -186,6 +193,14 @@ def get_all_python_dirs(extensions: list[str]) -> list[str]:
     for ext in get_all_extensions(extensions):
         dirs.extend(EXTENSIONS[ext].get("python_dirs", []))
     return dirs
+
+
+def get_all_python_files(extensions: list[str]) -> list[str]:
+    """Get all Python single-file modules to bundle for the given extensions."""
+    files = []
+    for ext in get_all_extensions(extensions):
+        files.extend(EXTENSIONS[ext].get("python_files", []))
+    return files
 
 
 def get_validation_files(extensions: list[str]) -> dict[str, list[str]]:
