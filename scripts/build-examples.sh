@@ -249,6 +249,47 @@ build_python_module "python-numpy-test"
 build_python_module "python-pandas-test"
 build_python_module "python-pydantic-test"
 
+print_header "Precompiling WASM Modules"
+
+precompile_modules() {
+    local dir="$1"
+    if [[ -d "$dir" ]]; then
+        # Check if there are any .wasm files in the directory
+        if ls "$dir"/*.wasm 1>/dev/null 2>&1; then
+            "$WADUP_ROOT/target/release/wadup" compile --modules "$dir" 2>&1 | grep -v "^$" || true
+        fi
+    fi
+}
+
+PRECOMPILE_START=$(python3 -c "import time; print(time.time())")
+
+# Rust modules (in wasm32-wasip1/release)
+precompile_modules "$WADUP_ROOT/examples/sqlite-parser/target/wasm32-wasip1/release"
+precompile_modules "$WADUP_ROOT/examples/zip-extractor/target/wasm32-wasip1/release"
+precompile_modules "$WADUP_ROOT/examples/byte-counter/target/wasm32-wasip1/release"
+precompile_modules "$WADUP_ROOT/examples/simple-test/target/wasm32-wasip1/release"
+
+# Go modules
+precompile_modules "$WADUP_ROOT/examples/go-sqlite-parser/target"
+
+# C# modules
+precompile_modules "$WADUP_ROOT/examples/csharp-json-analyzer/target"
+
+# Python modules
+precompile_modules "$WADUP_ROOT/examples/python-sqlite-parser/target"
+precompile_modules "$WADUP_ROOT/examples/python-counter/target"
+precompile_modules "$WADUP_ROOT/examples/python-module-test/target"
+precompile_modules "$WADUP_ROOT/examples/python-multi-file/target"
+precompile_modules "$WADUP_ROOT/examples/python-lxml-test/target"
+precompile_modules "$WADUP_ROOT/examples/python-numpy-test/target"
+precompile_modules "$WADUP_ROOT/examples/python-pandas-test/target"
+precompile_modules "$WADUP_ROOT/examples/python-pydantic-test/target"
+
+PRECOMPILE_END=$(python3 -c "import time; print(time.time())")
+PRECOMPILE_DURATION=$(python3 -c "print(f'{$PRECOMPILE_END - $PRECOMPILE_START:.2f}')")
+print_success "Precompilation completed in ${PRECOMPILE_DURATION}s"
+record_timing "precompile-all" "$PRECOMPILE_DURATION"
+
 print_timing_table
 
 print_success "All examples built successfully!"

@@ -143,13 +143,21 @@ copy_module() {
     fi
 
     cp "$wasm_path" "$MODULES_DIR/"
+
+    # Also copy precompiled cache if it exists
+    local wasm_dir=$(dirname "$wasm_path")
+    local wasm_stem=$(basename "${wasm_path%.wasm}")
+    local cache_path="$wasm_dir/${wasm_stem}_precompiled"
+    if [[ -f "$cache_path" ]]; then
+        cp "$cache_path" "$MODULES_DIR/"
+    fi
 }
 
 # Run wadup and capture output
 run_wadup() {
     local extra_args=("$@")
 
-    "$WADUP_BIN" \
+    "$WADUP_BIN" run \
         --modules "$MODULES_DIR" \
         --input "$INPUT_DIR" \
         --output "$OUTPUT_DB" \

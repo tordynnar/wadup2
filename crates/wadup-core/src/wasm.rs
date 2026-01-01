@@ -75,7 +75,7 @@ impl WasmRuntime {
                     .unwrap_or("unknown")
                     .to_string();
 
-                let module = Module::from_file(&self.engine, &path)?;
+                let module = crate::precompile::load_module_with_cache(&self.engine, &path)?;
 
                 // Validate module exports and determine style
                 let style = self.validate_module(&module)?;
