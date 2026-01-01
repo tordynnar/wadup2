@@ -375,44 +375,6 @@ EOF
     assert_row_count "xml_elements" 1 "ge" || return 1
 }
 
-test_python_numpy() {
-    setup_test_env
-    trap cleanup_test_env RETURN
-
-    copy_module "python-numpy-test" || return 1
-    echo "test" > "$INPUT_DIR/test.txt"
-
-    run_wadup > /dev/null || return 1
-
-    assert_table_exists "numpy_result" || return 1
-
-    # Verify numpy version is reported
-    local version=$(query_db "SELECT numpy_version FROM numpy_result LIMIT 1" 2>/dev/null || echo "")
-    if [[ -z "$version" ]]; then
-        print_error "NumPy version not found in results"
-        return 1
-    fi
-}
-
-test_python_pandas() {
-    setup_test_env
-    trap cleanup_test_env RETURN
-
-    copy_module "python-pandas-test" || return 1
-    echo "test" > "$INPUT_DIR/test.txt"
-
-    run_wadup > /dev/null || return 1
-
-    assert_table_exists "pandas_result" || return 1
-
-    # Verify pandas version is reported
-    local version=$(query_db "SELECT pandas_version FROM pandas_result LIMIT 1" 2>/dev/null || echo "")
-    if [[ -z "$version" ]]; then
-        print_error "Pandas version not found in results"
-        return 1
-    fi
-}
-
 test_python_pydantic() {
     setup_test_env
     trap cleanup_test_env RETURN
@@ -420,7 +382,7 @@ test_python_pydantic() {
     copy_module "python-pydantic-test" || return 1
     echo "test" > "$INPUT_DIR/test.txt"
 
-    # Pydantic needs larger stack
+    # pydantic_core needs larger stack
     run_wadup --max-stack 8388608 > /dev/null || return 1
 
     assert_table_exists "users" || return 1
@@ -436,14 +398,14 @@ test_python_pydantic() {
         return 1
     fi
 
-    # Verify pydantic version
-    local pydantic_version=$(query_db "SELECT value FROM info WHERE key='pydantic_version'")
-    if [[ -z "$pydantic_version" ]]; then
-        print_error "Pydantic version not found"
+    # Verify pydantic_core version (we use pydantic_core directly, not high-level pydantic)
+    local pydantic_core_version=$(query_db "SELECT value FROM info WHERE key='pydantic_core_version'")
+    if [[ -z "$pydantic_core_version" ]]; then
+        print_error "pydantic_core version not found"
         return 1
     fi
 
-    print_info "Pydantic $pydantic_version working with BaseModel"
+    print_info "pydantic_core $pydantic_core_version validation working"
 }
 
 # ============================================================
@@ -498,8 +460,6 @@ ALL_TESTS=(
     "test_python_multi_file"
     "test_simple_module"
     "test_python_lxml"
-    "test_python_numpy"
-    "test_python_pandas"
     "test_python_pydantic"
 )
 

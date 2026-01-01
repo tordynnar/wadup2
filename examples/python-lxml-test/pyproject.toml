@@ -6,4 +6,3 @@ dependencies = []
 
 [tool.wadup]
 entry-point = "python_lxml_test"
-c-extensions = ["lxml"]

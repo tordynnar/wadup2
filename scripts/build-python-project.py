@@ -10,7 +10,7 @@ The project directory must contain:
   - src/<module_name>/__init__.py entry point
 
 Dependencies listed in pyproject.toml are bundled if they are pure Python.
-C extensions (lxml, numpy, pandas) can be enabled via [tool.wadup].c-extensions.
+lxml and pydantic are automatically included in all builds.
 """
 
 import argparse
@@ -27,8 +27,6 @@ from pathlib import Path
 # Add parent directory to path so we can import extensions registry
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from extensions import (
-    EXTENSIONS,
-    get_all_extensions,
     get_all_modules,
     get_all_libraries,
     get_all_python_dirs,
@@ -72,8 +70,8 @@ def print_error(msg: str) -> None:
     print(f"{Colors.RED}✗{Colors.NC} {msg}")
 
 
-def parse_pyproject(project_dir: Path) -> tuple[str, str, list[str], list[str]]:
-    """Parse pyproject.toml and return (name, entry_point, dependencies, c_extensions)."""
+def parse_pyproject(project_dir: Path) -> tuple[str, str, list[str]]:
+    """Parse pyproject.toml and return (name, entry_point, dependencies)."""
     pyproject_path = project_dir / "pyproject.toml"
 
     with open(pyproject_path, 'rb') as f:
@@ -85,7 +83,6 @@ def parse_pyproject(project_dir: Path) -> tuple[str, str, list[str], list[str]]:
     name = project.get('name', '')
     entry_point = wadup.get('entry-point', '')
     dependencies = project.get('dependencies', [])
-    c_extensions = wadup.get('c-extensions', [])
 
     if not name:
         print_error("[project].name not found in pyproject.toml")
@@ -95,7 +92,7 @@ def parse_pyproject(project_dir: Path) -> tuple[str, str, list[str], list[str]]:
         print_error("[tool.wadup].entry-point not found in pyproject.toml")
         sys.exit(1)
 
-    return name, entry_point, dependencies, c_extensions
+    return name, entry_point, dependencies
 
 
 def download_dependencies(dependencies: list[str], deps_dir: Path) -> None:
@@ -214,33 +211,28 @@ def extract_wheel(wheel_path: Path, bundle_dir: Path, temp_dir: Path) -> None:
     shutil.rmtree(wheel_extract)
 
 
-def generate_main_bundled_c(c_extensions: list[str], template_path: Path, output_path: Path) -> None:
+def generate_main_bundled_c(template_path: Path, output_path: Path) -> None:
     """Generate main_bundled.c from template with extension registrations."""
     with open(template_path, 'r') as f:
         template = f.read()
 
-    if not c_extensions:
-        # No extensions - empty placeholders
-        extern_declarations = ""
-        register_extensions = ""
-    else:
-        # Get all modules to register (resolves dependencies)
-        modules = get_all_modules(c_extensions)
+    # Get all modules to register (lxml + pydantic)
+    modules = get_all_modules()
 
-        # Generate extern declarations
-        extern_lines = []
-        for module_name, init_func in modules:
-            extern_lines.append(f"extern PyObject* {init_func}(void);")
-        extern_declarations = "\n".join(extern_lines)
+    # Generate extern declarations
+    extern_lines = []
+    for module_name, init_func in modules:
+        extern_lines.append(f"extern PyObject* {init_func}(void);")
+    extern_declarations = "\n".join(extern_lines)
 
-        # Generate registration code
-        register_lines = []
-        for module_name, init_func in modules:
-            register_lines.append(f'    if (PyImport_AppendInittab("{module_name}", {init_func}) == -1) {{')
-            register_lines.append(f'        fprintf(stderr, "Failed to register {module_name}\\n");')
-            register_lines.append('        return 1;')
-            register_lines.append('    }')
-        register_extensions = "\n".join(register_lines)
+    # Generate registration code
+    register_lines = []
+    for module_name, init_func in modules:
+        register_lines.append(f'    if (PyImport_AppendInittab("{module_name}", {init_func}) == -1) {{')
+        register_lines.append(f'        fprintf(stderr, "Failed to register {module_name}\\n");')
+        register_lines.append('        return 1;')
+        register_lines.append('    }')
+    register_extensions = "\n".join(register_lines)
 
     # Replace placeholders
     output = template.replace("// {{EXTERN_DECLARATIONS}}", extern_declarations)
@@ -297,14 +289,12 @@ def main() -> int:
 
     # Parse pyproject.toml
     print_info("Parsing pyproject.toml...")
-    project_name, entry_module, dependencies, c_extensions = parse_pyproject(project_dir)
+    project_name, entry_module, dependencies = parse_pyproject(project_dir)
 
     print_success(f"Project: {project_name}")
     print_success(f"Entry point: {entry_module}")
     if dependencies:
         print_success(f"Dependencies: {' '.join(dependencies)}")
-    if c_extensions:
-        print_success(f"C extensions: {' '.join(c_extensions)}")
     print()
 
     # Convert project name to WASM filename (hyphens to underscores)
@@ -344,16 +334,14 @@ def main() -> int:
         print_error("zlib not found. Run ./scripts/download-deps.sh first")
         return 1
 
-    # Validate C extensions using registry
-    if c_extensions:
-        validation_files = get_validation_files(c_extensions)
-        for ext_name, files in validation_files.items():
-            for validation_file in files:
-                full_path = deps_dir / validation_file
-                if not full_path.exists():
-                    print_error(f"{ext_name} not built: {validation_file} not found")
-                    print_error(f"Run ./scripts/build-{ext_name}-wasi.sh first")
-                    return 1
+    # Validate C extensions (lxml and pydantic always required)
+    validation_files = get_validation_files()
+    for validation_file in validation_files:
+        full_path = deps_dir / validation_file
+        if not full_path.exists():
+            print_error(f"C extension not built: {validation_file} not found")
+            print_error("Run ./scripts/build-lxml-wasi.sh and ./scripts/build-pydantic-wasi.sh first")
+            return 1
 
     # Validate source directory
     source_dir = project_dir / "src" / entry_module
@@ -387,34 +375,33 @@ def main() -> int:
         print_info("Bundling project source...")
         shutil.copytree(source_dir, bundle_dir / entry_module)
 
-        # Bundle C extension Python files using registry
-        if c_extensions:
-            ext_python_dirs = get_all_python_dirs(c_extensions)
-            for ext_python_dir in ext_python_dirs:
-                # ext_python_dir is like "wasi-lxml/python/lxml"
-                # We need to copy to bundle_dir using just the package name (last component)
-                src_path = deps_dir / ext_python_dir
-                pkg_name = src_path.name
-                print_info(f"Bundling {pkg_name} Python files...")
-                shutil.copytree(src_path, bundle_dir / pkg_name)
+        # Bundle C extension Python files (lxml + pydantic always included)
+        ext_python_dirs = get_all_python_dirs()
+        for ext_python_dir in ext_python_dirs:
+            # ext_python_dir is like "wasi-lxml/python/lxml"
+            # We need to copy to bundle_dir using just the package name (last component)
+            src_path = deps_dir / ext_python_dir
+            pkg_name = src_path.name
+            print_info(f"Bundling {pkg_name} Python files...")
+            shutil.copytree(src_path, bundle_dir / pkg_name)
 
-            # Also copy single-file Python modules (like typing_extensions.py)
-            ext_python_files = get_all_python_files(c_extensions)
-            for ext_python_file in ext_python_files:
-                # ext_python_file is like "wasi-pydantic/python/typing_extensions.py"
-                src_path = deps_dir / ext_python_file
-                if src_path.exists():
-                    print_info(f"Bundling {src_path.name}...")
-                    shutil.copy(src_path, bundle_dir / src_path.name)
+        # Also copy single-file Python modules (like typing_extensions.py)
+        ext_python_files = get_all_python_files()
+        for ext_python_file in ext_python_files:
+            # ext_python_file is like "wasi-pydantic/python/typing_extensions.py"
+            src_path = deps_dir / ext_python_file
+            if src_path.exists():
+                print_info(f"Bundling {src_path.name}...")
+                shutil.copy(src_path, bundle_dir / src_path.name)
 
-        # Copy WASI Python stubs (sysconfigdata, numpy.random stubs, etc.)
+        # Copy WASI Python stubs (sysconfigdata, etc.)
         # These are copied AFTER C extension Python files so stubs can override/augment
         wasi_stubs_python = deps_dir / "wasi-stubs" / "python"
         if wasi_stubs_python.is_dir():
             # Copy top-level .py files
             for stub_file in wasi_stubs_python.glob("*.py"):
                 shutil.copy(stub_file, bundle_dir / stub_file.name)
-            # Copy stub packages (e.g., numpy/random)
+            # Copy stub packages
             for stub_pkg in wasi_stubs_python.iterdir():
                 if stub_pkg.is_dir():
                     # Merge with existing package if it exists
@@ -431,6 +418,8 @@ def main() -> int:
                         shutil.copytree(stub_pkg, dest_pkg)
 
         # Handle dependencies (if any)
+        # Skip packages that are already bundled as C extensions
+        bundled_packages = ['lxml', 'pydantic', 'pydantic_core', 'annotated_types', 'typing_extensions', 'typing_inspection']
         if dependencies:
             print_info("Downloading dependencies (including transitive)...")
             deps_temp = build_dir / "deps"
@@ -446,14 +435,13 @@ def main() -> int:
                     extract_archive(archive, deps_temp)
 
             # Copy extracted packages to bundle
-            # Skip C extensions since we bundle pre-built versions
             for pkg_dir in deps_temp.iterdir():
                 if not pkg_dir.is_dir():
                     continue
                 if pkg_dir.suffix in ('.tar', '.gz', '.zip'):
                     continue
 
-                copy_package_from_dir(pkg_dir, bundle_dir, skip_packages=c_extensions)
+                copy_package_from_dir(pkg_dir, bundle_dir, skip_packages=bundled_packages)
 
             # Also check for wheel files
             for wheel in deps_temp.glob("*.whl"):
@@ -504,7 +492,7 @@ def main() -> int:
         # Generate main_bundled.c from template with extension registrations
         main_c_template = wadup_root / "guest" / "python" / "src" / "main_bundled_template.c"
         main_c_dst = build_dir / "main_bundled.c"
-        generate_main_bundled_c(c_extensions, main_c_template, main_c_dst)
+        generate_main_bundled_c(main_c_template, main_c_dst)
 
         # Compile object file
         compile_cmd = [str(cc)] + cflags + ["-c", str(main_c_dst), "-o", str(build_dir / "main_bundled.o")]
@@ -516,16 +504,13 @@ def main() -> int:
         # Find Hacl library files
         hacl_libs = list((python_dir / "lib").glob("libHacl_*.a"))
 
-        # Build list of C extension libraries using registry
+        # Build list of C extension libraries (lxml + pydantic always included)
         ext_libs = []
-        resolved_extensions = []
-        if c_extensions:
-            resolved_extensions = get_all_extensions(c_extensions)
-            ext_lib_paths = get_all_libraries(c_extensions)
-            for lib_path in ext_lib_paths:
-                full_path = deps_dir / lib_path
-                if full_path.exists():
-                    ext_libs.append(str(full_path))
+        ext_lib_paths = get_all_libraries()
+        for lib_path in ext_lib_paths:
+            full_path = deps_dir / lib_path
+            if full_path.exists():
+                ext_libs.append(str(full_path))
 
         print_info("Linking...")
         link_cmd = [
@@ -539,7 +524,7 @@ def main() -> int:
             str(python_dir / "lib" / "libexpat.a"),
             str(python_dir / "lib" / "libsqlite3.a"),
             *[str(lib) for lib in hacl_libs],
-            *ext_libs,  # C extension libraries (lxml, numpy, pandas, etc.)
+            *ext_libs,  # C extension libraries (lxml + pydantic)
             str(deps_dir / "wasi-zlib" / "lib" / "libz.a"),
             str(deps_dir / "wasi-bzip2" / "lib" / "libbz2.a"),
             str(deps_dir / "wasi-xz" / "lib" / "liblzma.a"),
@@ -549,26 +534,6 @@ def main() -> int:
             "-lm",
             *ldflags
         ]
-
-        # NumPy uses long double formatting which requires extra libc support
-        if "numpy" in resolved_extensions:
-            link_cmd.append("-lc-printscan-long-double")
-
-        # Pandas uses khash which has inline functions that can cause duplicate symbols
-        if "pandas" in resolved_extensions:
-            link_cmd.insert(1, "-Wl,--allow-multiple-definition")
-
-        # C++ runtime for extensions that use exceptions (e.g., pandas aggregations)
-        needs_cxx_runtime = any(
-            EXTENSIONS.get(ext, {}).get("requires_cxx_runtime", False)
-            for ext in resolved_extensions
-        )
-        if needs_cxx_runtime:
-            wasi_lib_dir = wasi_sysroot / "lib" / "wasm32-wasi"
-            link_cmd.extend([
-                str(wasi_lib_dir / "libc++.a"),
-                str(wasi_lib_dir / "libc++abi.a"),
-            ])
 
         result = subprocess.run(link_cmd, cwd=build_dir)
         if result.returncode != 0:

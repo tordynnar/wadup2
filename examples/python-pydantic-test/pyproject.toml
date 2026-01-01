@@ -6,4 +6,3 @@ dependencies = []
 
 [tool.wadup]
 entry-point = "python_pydantic_test"
-c-extensions = ["pydantic"]

@@ -208,8 +208,6 @@ build_python_module "python-counter"
 build_python_module "python-module-test"
 build_python_module "python-multi-file"
 build_python_module "python-lxml-test"
-build_python_module "python-numpy-test"
-build_python_module "python-pandas-test"
 build_python_module "python-pydantic-test"
 
 print_header "Precompiling WASM Modules"
@@ -241,8 +239,6 @@ precompile_modules "$WADUP_ROOT/examples/python-counter/target"
 precompile_modules "$WADUP_ROOT/examples/python-module-test/target"
 precompile_modules "$WADUP_ROOT/examples/python-multi-file/target"
 precompile_modules "$WADUP_ROOT/examples/python-lxml-test/target"
-precompile_modules "$WADUP_ROOT/examples/python-numpy-test/target"
-precompile_modules "$WADUP_ROOT/examples/python-pandas-test/target"
 precompile_modules "$WADUP_ROOT/examples/python-pydantic-test/target"
 
 PRECOMPILE_END=$(python3 -c "import time; print(time.time())")
