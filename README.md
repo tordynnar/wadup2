@@ -67,7 +67,7 @@ All languages use file-based metadata output (writing JSON to `/metadata/*.json`
 
 **Rust** modules export a `process()` function and are reused across files (one instance processes all files per thread).
 
-**Python** modules use embedded CPython 3.13.7 with a `main()` function entry point. Supports pure-Python third-party dependencies bundled into the WASM module.
+**Python** modules use embedded CPython 3.13.7 with a `main()` function entry point. Supports pure-Python third-party dependencies and C extensions (NumPy, Pandas) bundled into the WASM module.
 
 **Go** modules export a `process()` function using `//go:wasmexport` and are reused like Rust.
 
@@ -394,6 +394,8 @@ See the `examples/` directory for working WASM modules:
 - **python-counter**: Demonstrates module reuse with global state
 - **python-module-test**: Tests C extension imports (sqlite3, json, etc.)
 - **python-multi-file**: Multi-file project with third-party dependencies (chardet, humanize, python-slugify)
+- **python-numpy-test**: NumPy 2.4.0 array operations and linear algebra
+- **python-pandas-test**: Pandas 2.3.3 DataFrame operations
 
 **Go Modules:**
 - **go-sqlite-parser**: Parses SQLite databases using pure Go SQLite library
@@ -478,9 +480,27 @@ The build script:
 4. Embeds the ZIP into a C file and compiles with CPython
 
 **Third-party dependencies:**
-- Only pure-Python packages are supported (no C extensions)
+- Pure-Python packages are fully supported
 - Transitive dependencies are automatically resolved
 - Dependencies are bundled into the WASM module
+
+**Scientific Computing (NumPy & Pandas):**
+
+NumPy 2.4.0 and Pandas 2.3.3 are supported as C extensions. To use them:
+
+```toml
+[tool.wadup]
+entry-point = "my_module"
+c-extensions = ["numpy"]           # NumPy only (~44 MB WASM)
+# or
+c-extensions = ["numpy", "pandas"] # NumPy + Pandas (~62 MB WASM)
+```
+
+NumPy provides array operations, linear algebra (`numpy.linalg`), and mathematical functions. Pandas provides DataFrames, Series, and data manipulation. Some features requiring OS-level support (random, fft, mmap) are not available.
+
+For detailed build information and limitations:
+- [NumPy WASI Build Guide](NUMPY_WASI.md)
+- [Pandas WASI Build Guide](PANDAS_WASI.md)
 
 The shared Python WASI build (`build/python-wasi/`) includes:
 - CPython 3.13.7 compiled for wasm32-wasip1
