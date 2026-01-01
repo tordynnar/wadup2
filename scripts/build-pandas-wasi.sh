@@ -171,7 +171,7 @@ fi
 # Check for and generate __multiarray_api.h if needed
 if [ ! -f "$NUMPY_INCLUDE/numpy/__multiarray_api.h" ]; then
     echo "WARNING: NumPy API headers not found. Regenerating from NumPy source..."
-    NUMPY_SRC="$DEPS_DIR/numpy-2.1.3"
+    NUMPY_SRC="$DEPS_DIR/numpy-2.4.0"
     if [ -d "$NUMPY_SRC" ]; then
         # Headers should exist in native build
         if [ -f "$NUMPY_SRC/build-native/numpy/_core/__multiarray_api.h" ]; then

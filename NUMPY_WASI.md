@@ -4,7 +4,7 @@ This document describes how NumPy was successfully compiled and run on WASI (Web
 
 ## Summary
 
-NumPy 2.1.3 now works on WASI with the following capabilities:
+NumPy 2.4.0 now works on WASI with the following capabilities:
 - Array creation and manipulation
 - Mathematical operations (sum, mean, std, min, max)
 - Type introspection (shape, dtype)
@@ -13,7 +13,7 @@ NumPy 2.1.3 now works on WASI with the following capabilities:
 
 **Test results:**
 ```
-numpy_version: 2.1.3
+numpy_version: 2.4.0
 array: [1.0, 2.0, 3.0, 4.0, 5.0]
 shape: [5], dtype: float64
 sum: 15.0, mean: 3.0, std: 1.414...

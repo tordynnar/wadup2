@@ -70,8 +70,10 @@ def main():
 
             arr = _core.array(numbers)
 
+            # Get actual numpy version
+            import numpy as np
             wadup.insert_row("numpy_result", [
-                "2.1.3",  # Version
+                np.__version__,
                 str(numbers),
                 str(list(arr.shape)),
                 str(arr.dtype),
