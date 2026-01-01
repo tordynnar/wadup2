@@ -363,22 +363,83 @@ SubContent::emit_slice(
 )?;
 ```
 
-## Database Schema
+## Metadata Store
 
-WADUP automatically creates a `__wadup_content` table to track processing:
+WADUP uses a SQLite database as its metadata store, with WAL mode enabled for concurrent access. The store manages two types of tables:
+
+### System Table: `__wadup_content`
+
+Automatically created to track all processed content:
 
 ```sql
 CREATE TABLE __wadup_content (
-    uuid TEXT PRIMARY KEY,
-    filename TEXT NOT NULL,
-    parent_uuid TEXT,           -- NULL for top-level content
-    processed_at INTEGER NOT NULL,
-    status TEXT NOT NULL,       -- 'success' or 'failed'
-    error_message TEXT
+    uuid TEXT PRIMARY KEY,        -- Unique identifier for this content
+    filename TEXT NOT NULL,       -- Original filename or extracted name
+    parent_uuid TEXT,             -- Parent content UUID (NULL for top-level files)
+    processed_at INTEGER NOT NULL, -- Unix timestamp of processing
+    status TEXT NOT NULL,         -- 'success' or 'failed'
+    error_message TEXT            -- Error details if status='failed'
 );
 ```
 
-Module-defined tables use `content_uuid` as a foreign key to `__wadup_content.uuid`.
+The `parent_uuid` column enables tracking of content hierarchies. For example, when a ZIP extractor module emits files from an archive, those files reference the ZIP's UUID as their parent.
+
+### Module-Defined Tables
+
+Modules define custom tables to store extracted metadata. Each table automatically includes a `content_uuid` column as a foreign key:
+
+```sql
+-- Example: Module defines table "file_sizes" with column "size_bytes"
+CREATE TABLE file_sizes (
+    content_uuid TEXT NOT NULL,   -- Auto-added, references __wadup_content(uuid)
+    size_bytes INTEGER,           -- Module-defined column
+    FOREIGN KEY(content_uuid) REFERENCES __wadup_content(uuid)
+);
+```
+
+### Data Types
+
+Modules can use three data types for columns:
+
+| Type | SQLite Type | Description |
+|------|-------------|-------------|
+| `Int64` | INTEGER | 64-bit signed integer |
+| `Float64` | REAL | 64-bit floating point |
+| `String` | TEXT | UTF-8 string |
+
+### Schema Validation
+
+When multiple modules or files define the same table, WADUP validates that schemas match exactly (same column names, same types, same order). Schema mismatches cause processing errors.
+
+### Example Queries
+
+```sql
+-- List all processed files with status
+SELECT filename, status, error_message FROM __wadup_content;
+
+-- Find all content extracted from a specific file
+SELECT c2.filename, c2.status
+FROM __wadup_content c1
+JOIN __wadup_content c2 ON c2.parent_uuid = c1.uuid
+WHERE c1.filename = 'archive.zip';
+
+-- Join module data with content info
+SELECT c.filename, f.size_bytes
+FROM file_sizes f
+JOIN __wadup_content c ON c.uuid = f.content_uuid
+WHERE c.status = 'success';
+
+-- Trace content ancestry (recursive)
+WITH RECURSIVE ancestry AS (
+    SELECT uuid, filename, parent_uuid, 0 as depth
+    FROM __wadup_content WHERE filename = 'nested/file.txt'
+    UNION ALL
+    SELECT c.uuid, c.filename, c.parent_uuid, a.depth + 1
+    FROM __wadup_content c
+    JOIN ancestry a ON c.uuid = a.parent_uuid
+)
+SELECT * FROM ancestry;
+```
 
 ## Examples
 
