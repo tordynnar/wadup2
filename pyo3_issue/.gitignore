@@ -1,0 +1,7 @@
+# Build artifacts
+/build/
+/target/
+Cargo.lock
+
+# Downloaded dependencies (WASI SDK, Python, etc.)
+/deps/
