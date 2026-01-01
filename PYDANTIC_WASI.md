@@ -1,149 +1,20 @@
-# Building pydantic_core for WASI
+# Pydantic on WASI
 
-This document describes how `pydantic_core` (the Rust-based validation engine for Pydantic v2) was made to work on WASI (WebAssembly System Interface).
+This document describes how Pydantic (including the full `BaseModel` API) was made to work on WASI (WebAssembly System Interface).
 
 ## Executive Summary
 
-**pydantic_core 2.41.5 works on WASI with minimal modifications.** The only changes required are:
-1. Change crate-type from `cdylib` to `staticlib` (WASI doesn't support dynamic linking)
-2. Remove the `generate-import-lib` PyO3 feature (Windows-only)
-3. Provide a PyO3 cross-compilation config file
+**Pydantic 2.12.5 with BaseModel works on WASI.** This required:
 
-No source code patches are needed. PyO3's `PyOnceLock` and `once_cell::sync::OnceCell` work correctly on WASI.
+1. Building `pydantic_core` (Rust library) as a static library for WASI
+2. Bundling all Python dependencies (pydantic, annotated_types, typing_inspection, typing_extensions)
+3. Patching pydantic to handle `importlib.metadata` circular import issues in Python 3.13
+4. Using increased stack size (8-64MB) for pydantic's deep import chains
+5. Importing pydantic internal modules in a specific order
 
-## Background Investigation
+## Quick Start
 
-### Initial Hypothesis (Incorrect)
-
-The original attempt to integrate pydantic_core failed, leading to the hypothesis that `PyOnceLock` (used extensively in pydantic_core for lazy static initialization) might not work on WASI due to threading limitations.
-
-### Testing PyOnceLock
-
-A minimal test case was created in `pyo3_issue/` to verify PyOnceLock behavior:
-
-```rust
-use pyo3::prelude::*;
-use pyo3::sync::GILOnceCell;
-use std::sync::OnceLock;
-
-static RUST_ONCE: OnceLock<i32> = OnceLock::new();
-static PY_ONCE: GILOnceCell<PyObject> = GILOnceCell::new();
-
-#[pyfunction]
-fn test_once_lock(py: Python<'_>) -> PyResult<(i32, String)> {
-    let rust_val = RUST_ONCE.get_or_init(|| 42);
-    let py_val = PY_ONCE.get_or_init(py, || {
-        PyString::new(py, "initialized").into()
-    });
-    Ok((*rust_val, py_val.extract::<String>(py)?))
-}
-```
-
-**Result: Both work correctly on WASI.** The test passes, and multiple calls return the same initialized values.
-
-### Root Cause of Original Failure
-
-The original pydantic_core build attempt failed because:
-1. Incomplete patches were applied to source files
-2. The patches tried to replace `PyOnceLock` with `thread_local!`, but were incomplete
-3. This left the code in a broken state
-
-**Solution:** Don't patch the source. Build pydantic_core as-is with only Cargo.toml modifications.
-
-## Build Process
-
-### Prerequisites
-
-- WASI SDK 24.0+ installed at `/opt/wasi-sdk`
-- Rust with `wasm32-wasip1` target: `rustup target add wasm32-wasip1`
-- Python 3.13 WASI build (from `build/python-wasi/`)
-
-### Build Script
-
-The build script is at `scripts/build-pydantic-wasi.sh`. Key steps:
-
-#### 1. Download Source
-
-```bash
-pip download --no-binary :all: pydantic-core==2.41.5 -d .
-tar xf pydantic_core-2.41.5.tar.gz
-```
-
-#### 2. Patch Cargo.toml
-
-Only two changes are needed:
-
-```bash
-# Remove Windows-only feature
-sed -i.bak 's/"generate-import-lib", //' Cargo.toml
-
-# Change to static library (WASI doesn't support cdylib)
-sed -i.bak 's/crate-type = \["cdylib", "rlib"\]/crate-type = ["staticlib", "rlib"]/' Cargo.toml
-```
-
-#### 3. Create PyO3 Cross-Compilation Config
-
-PyO3 needs to know the target Python configuration:
-
-```bash
-cat > pyo3-wasi-config.txt << 'EOF'
-implementation=CPython
-version=3.13
-shared=false
-abi3=false
-lib_name=python3.13
-pointer_width=32
-suppress_build_script_link_lines=true
-EOF
-
-export PYO3_CONFIG_FILE="$(pwd)/pyo3-wasi-config.txt"
-```
-
-#### 4. Build for WASI
-
-```bash
-export WASI_SDK_PATH=/opt/wasi-sdk
-export CC="${WASI_SDK_PATH}/bin/clang"
-export AR="${WASI_SDK_PATH}/bin/ar"
-export CARGO_TARGET_WASM32_WASIP1_LINKER="${CC}"
-
-cargo build --target wasm32-wasip1 --release
-```
-
-#### 5. Output
-
-The build produces:
-- `target/wasm32-wasip1/release/lib_pydantic_core.a` (~39MB static library)
-
-This is copied to `deps/wasi-pydantic/lib/lib_pydantic_core.a` along with the Python package files.
-
-## Integration into WADUP
-
-### Extension Registry
-
-Add to `extensions/__init__.py`:
-
-```python
-"pydantic": {
-    "modules": [
-        ("_pydantic_core", "PyInit__pydantic_core"),
-    ],
-    "libraries": [
-        "wasi-pydantic/lib/lib_pydantic_core.a",
-    ],
-    "python_dirs": [
-        "wasi-pydantic/python/pydantic_core",
-    ],
-    "dependencies": [],
-    "validation": [
-        "wasi-pydantic/lib/lib_pydantic_core.a",
-    ],
-},
-```
-
-### Using in Projects
-
-In your `pyproject.toml`:
+### pyproject.toml
 
 ```toml
 [project]
@@ -155,81 +26,156 @@ entry-point = "my_module"
 c-extensions = ["pydantic"]
 ```
 
-In your Python code:
+### Python Code
 
 ```python
-from pydantic_core import SchemaValidator, SchemaSerializer, ValidationError
+import wadup
 
-# Create a validator
-validator = SchemaValidator({"type": "str"})
+def main():
+    # Import pydantic modules in order to avoid deep import chains
+    import pydantic._internal._config
+    import pydantic._internal._fields
+    import pydantic._internal._generate_schema
+    import pydantic.main
 
-# Validate data
-try:
-    result = validator.validate_python("hello")
-    print(f"Valid: {result}")
-except ValidationError as e:
-    print(f"Invalid: {e}")
+    from pydantic import BaseModel, Field
 
-# Serialize to JSON
-serializer = SchemaSerializer({"type": "int"})
-json_bytes = serializer.to_json(42)  # b'42'
+    class User(BaseModel):
+        name: str
+        age: int = Field(ge=0, le=150)
+        email: str | None = None
+
+    # Create validated instances
+    user = User(name="Alice", age=30, email="alice@example.com")
+
+    # Use in your WADUP module
+    wadup.define_table("users", [
+        ("name", "String"),
+        ("age", "Int64"),
+        ("email", "String"),
+    ])
+    wadup.insert_row("users", [user.name, user.age, user.email or ""])
+    wadup.flush()
 ```
 
-## Verified Functionality
+### Running with Increased Stack
 
-The following pydantic_core features have been tested and work on WASI:
+```bash
+wadup --modules ./modules --input ./data --output results.db --max-stack 8388608
+```
 
-### SchemaValidator
-- String validation
-- Integer validation (with coercion and strict mode)
-- Float validation (with string coercion)
-- Boolean validation
-- List validation with item schemas
-- Dict validation with key/value schemas
-- Validation error messages with detailed information
+## Why the Special Import Order?
 
-### SchemaSerializer
-- JSON serialization of all basic types
-- Proper encoding to bytes
+Pydantic has deep, recursive import chains that can exceed WASI stack limits:
 
-## Why the Full Pydantic Library Doesn't Work
-
-**Important:** Only `pydantic_core` works on WASI. The full `pydantic` library (with `BaseModel`, `Field`, etc.) does not work due to the following limitations:
-
-### 1. Stack Overflow During Import
-
-The pydantic library has deep, complex import chains:
 ```
 pydantic → pydantic.main → pydantic._internal._decorators → pydantic._internal._core_utils → ...
 ```
 
-These nested imports exceed WASI's default stack limits, causing a stack overflow during module initialization.
+By pre-importing the internal modules in order, we "warm up" the import cache and avoid the deep recursion:
 
-### 2. typing_extensions Dependency
-
-Both `pydantic` and `pydantic_core`'s `core_schema.py` module depend on `typing_extensions`:
 ```python
-from typing_extensions import TypeVar, deprecated, Sentinel
+import pydantic._internal._config
+import pydantic._internal._fields
+import pydantic._internal._generate_schema
+import pydantic.main
+
+from pydantic import BaseModel, Field  # Now this works!
 ```
 
-The `typing_extensions` package is not bundled by default, and bundling it adds complexity and size.
+## WASI Patches
 
-### 3. Complex Type System
+The build script applies three patches to handle `importlib.metadata` issues in Python 3.13 WASI:
 
-Pydantic's `BaseModel` relies heavily on Python's type system, metaclasses, and runtime type introspection. These features work but add significant overhead and import complexity.
+### 1. pydantic/plugin/_loader.py
 
-### Workaround: Use pydantic_core Directly
+Wraps the `importlib.metadata` import in try/except:
 
-Instead of:
 ```python
-from pydantic import BaseModel, Field
-
-class Person(BaseModel):
-    name: str
-    age: int = Field(ge=0)
+try:
+    import importlib.metadata as importlib_metadata
+    _HAS_IMPORTLIB_METADATA = True
+except (ImportError, ModuleNotFoundError):
+    _HAS_IMPORTLIB_METADATA = False
+    importlib_metadata = None
 ```
 
-Use pydantic_core's schema dictionary format:
+### 2. pydantic/version.py
+
+Wraps `importlib.metadata` usage in `version_info()` and `_ensure_pydantic_core_version()`.
+
+### 3. pydantic/networks.py
+
+Replaces the direct `from importlib.metadata import version` with a wrapper function that handles WASI gracefully.
+
+**Why these patches?** Python 3.13 uses "frozen modules" for `importlib.metadata`, which causes circular import issues in WASI. The patches allow pydantic to gracefully degrade when the module isn't available.
+
+## Building pydantic_core
+
+The Rust-based `pydantic_core` library requires minimal modifications for WASI:
+
+### Cargo.toml Changes
+
+```bash
+# Remove Windows-only feature
+sed -i.bak 's/"generate-import-lib", //' Cargo.toml
+
+# Change to static library (WASI doesn't support cdylib)
+sed -i.bak 's/crate-type = \["cdylib", "rlib"\]/crate-type = ["staticlib", "rlib"]/' Cargo.toml
+```
+
+### PyO3 Cross-Compilation Config
+
+```
+implementation=CPython
+version=3.13
+shared=false
+abi3=false
+lib_name=python3.13
+pointer_width=32
+suppress_build_script_link_lines=true
+```
+
+### Build Command
+
+```bash
+export PYO3_CONFIG_FILE="$(pwd)/pyo3-wasi-config.txt"
+export CARGO_TARGET_WASM32_WASIP1_LINKER="${WASI_SDK_PATH}/bin/wasm-ld"
+cargo build --target wasm32-wasip1 --release
+```
+
+## Bundled Dependencies
+
+The pydantic extension bundles these Python packages:
+
+| Package | Version | Description |
+|---------|---------|-------------|
+| pydantic | 2.12.5 | High-level validation library (BaseModel, Field, etc.) |
+| pydantic_core | 2.41.5 | Rust-based validation engine |
+| typing_extensions | 4.15.0 | Backports of typing features |
+| annotated_types | 0.7.0 | Runtime type annotations |
+| typing_inspection | 0.4.2 | Type introspection utilities |
+
+## Verified Functionality
+
+### BaseModel Features
+- Field definitions with type annotations
+- Field constraints (ge, le, gt, lt, min_length, max_length, etc.)
+- Optional fields with `| None`
+- Default values
+- Nested models
+- Data validation and coercion
+
+### pydantic_core Features
+- SchemaValidator with all basic types
+- SchemaSerializer for JSON output
+- ValidationError with detailed messages
+- Custom error types
+
+## Alternative: Using pydantic_core Directly
+
+If you don't need BaseModel, you can use pydantic_core directly without the import order workaround:
+
 ```python
 from pydantic_core import SchemaValidator, ValidationError
 
@@ -248,88 +194,96 @@ except ValidationError as e:
     print(f"Invalid: {e}")
 ```
 
-This approach:
-- Avoids the complex import chain
-- Doesn't require typing_extensions
-- Works reliably on WASI
-- Provides the same validation capabilities
+## Extension Registry
 
-### Schema Reference
+The pydantic extension in `extensions/__init__.py`:
 
-For schema dictionary syntax, see the [pydantic_core documentation](https://docs.pydantic.dev/latest/concepts/json_schema/) or the `core_schema.py` source file.
-
-## Key Learnings
-
-### 1. PyOnceLock Works on WASI
-
-Despite WASI being single-threaded, `PyOnceLock` (which wraps `once_cell::sync::OnceCell`) works correctly. The synchronization primitives degrade gracefully on single-threaded targets.
-
-### 2. No Source Patches Needed
-
-The pydantic_core Rust source code requires no modifications. Only the Cargo.toml needs two simple changes for WASI compatibility.
-
-### 3. Static Linking is Required
-
-WASI doesn't support dynamic library loading (`dlopen`). All extensions must be:
-- Compiled as static libraries (`staticlib`)
-- Registered with `PyImport_AppendInittab` before `Py_Initialize()`
-- Linked into the final WASM binary
-
-### 4. PyO3 Cross-Compilation
-
-When cross-compiling PyO3 for WASI:
-- Set `PYO3_CONFIG_FILE` to a config file with target Python details
-- Use `pointer_width=32` (WASM is 32-bit)
-- Set `suppress_build_script_link_lines=true` to prevent native linking attempts
-
-### 5. Module Registration Name
-
-Register the module as `_pydantic_core` (not `pydantic_core._pydantic_core`). The Python package structure handles the import path.
+```python
+"pydantic": {
+    "modules": [
+        ("_pydantic_core", "PyInit__pydantic_core"),
+    ],
+    "libraries": [
+        "wasi-pydantic/lib/lib_pydantic_core.a",
+    ],
+    "python_dirs": [
+        "wasi-pydantic/python/pydantic_core",
+        "wasi-pydantic/python/pydantic",
+        "wasi-pydantic/python/annotated_types",
+        "wasi-pydantic/python/typing_inspection",
+    ],
+    "python_files": [
+        "wasi-pydantic/python/typing_extensions.py",
+    ],
+    "dependencies": [],
+},
+```
 
 ## Troubleshooting
 
-### "unknown variant `Bool`" Error
+### Stack Overflow on Import
 
-If you see: `Failed to parse metadata JSON: unknown variant 'Bool'`
+**Symptom:** Module crashes immediately on `from pydantic import BaseModel`
 
-This means your Python code is using `Bool` as a column type in `wadup.define_table()`. The WADUP host only supports:
-- `Int64`
-- `Float64`
-- `String`
+**Solution:**
+1. Use the import order pattern (import internal modules first)
+2. Increase stack size with `--max-stack 8388608` (8MB) or higher
 
-Use `Int64` for boolean values (0 = False, 1 = True).
+### "unknown variant" Error
+
+**Symptom:** `Failed to parse metadata JSON: unknown variant 'Bool'`
+
+**Solution:** WADUP only supports `Int64`, `Float64`, and `String` column types. Use `Int64` for booleans.
 
 ### Module Not Found
 
-If `import pydantic_core` fails:
-1. Verify the extension is listed in `c-extensions` in pyproject.toml
-2. Check that `deps/wasi-pydantic/lib/lib_pydantic_core.a` exists
-3. Ensure the Python package is at `deps/wasi-pydantic/python/pydantic_core/`
+**Symptom:** `ModuleNotFoundError: No module named 'pydantic'`
 
-### Build Fails with Linker Errors
+**Solution:**
+1. Verify `c-extensions = ["pydantic"]` in pyproject.toml
+2. Check that `deps/wasi-pydantic/` exists (run `./scripts/build-pydantic-wasi.sh`)
 
-Ensure WASI SDK environment is set:
-```bash
-export WASI_SDK_PATH=/opt/wasi-sdk
-export CC="${WASI_SDK_PATH}/bin/clang"
-export AR="${WASI_SDK_PATH}/bin/ar"
-```
+### importlib.metadata Errors
+
+**Symptom:** `ImportError: cannot import name '_meta' from partially initialized module 'importlib.metadata'`
+
+**Solution:** This should be fixed by the WASI patches. If you see this, rebuild pydantic with `./scripts/build-pydantic-wasi.sh` (delete `deps/wasi-pydantic/` first to force rebuild).
 
 ## File Locations
 
 | File | Description |
 |------|-------------|
-| `scripts/build-pydantic-wasi.sh` | Build script for pydantic_core |
-| `deps/wasi-pydantic/lib/lib_pydantic_core.a` | Compiled static library |
-| `deps/wasi-pydantic/python/pydantic_core/` | Python package files |
-| `extensions/__init__.py` | Extension registry (includes pydantic) |
-| `examples/python-pydantic-test/` | Example project using pydantic_core |
-| `pyo3_issue/` | Minimal test case for PyOnceLock investigation |
+| `scripts/build-pydantic-wasi.sh` | Build script (compiles pydantic_core, bundles Python packages, applies WASI patches) |
+| `deps/wasi-pydantic/lib/lib_pydantic_core.a` | Compiled static library (~39MB) |
+| `deps/wasi-pydantic/python/pydantic_core/` | pydantic_core Python package |
+| `deps/wasi-pydantic/python/pydantic/` | pydantic Python package (with WASI patches) |
+| `deps/wasi-pydantic/python/typing_extensions.py` | typing_extensions module |
+| `extensions/__init__.py` | Extension registry |
+| `examples/python-pydantic-test/` | Example project using BaseModel |
 
 ## Version Information
 
+- pydantic: 2.12.5
 - pydantic_core: 2.41.5
 - PyO3: 0.26
 - Rust: 1.75+
-- WASI SDK: 24.0+
+- WASI SDK: 29.0+
 - Python: 3.13
+
+## Key Learnings
+
+### 1. PyOnceLock Works on WASI
+
+Despite WASI being single-threaded, `PyOnceLock` (which wraps `once_cell::sync::OnceCell`) works correctly. The synchronization primitives degrade gracefully.
+
+### 2. importlib.metadata is Frozen in Python 3.13
+
+Python 3.13 compiles `importlib.metadata` as a frozen module, making it impossible to override via user code. Libraries must gracefully handle its absence.
+
+### 3. Import Order Matters
+
+Deep import chains can exceed stack limits. Pre-importing modules in order avoids deep recursion.
+
+### 4. Static Linking Required
+
+WASI doesn't support dynamic libraries. Extensions must be compiled as `staticlib` and linked into the final WASM binary.
