@@ -4,7 +4,9 @@ This document details the investigation into why the full `pydantic` library (sp
 
 ## Summary
 
-**Status**: The full pydantic library cannot be used in WASI due to a crash in the `pydantic_core` C extension during module initialization.
+**Status**: The full pydantic library cannot be used in WASI due to a crash during Python bytecode compilation of the large `_generate_schema.py` file (2884 lines).
+
+**Root Cause**: The crash occurs in the WASM memory allocator (dlmalloc, function 15532) during Python's bytecode compilation phase. This appears to be triggered by the complexity/size of `pydantic/_internal/_generate_schema.py`.
 
 **Workaround**: Use `pydantic_core` directly instead of the high-level `pydantic` API.
 
@@ -22,7 +24,7 @@ This document details the investigation into why the full `pydantic` library (sp
 
 ### Crash Location
 
-The crash occurs when importing `pydantic.main`, which is triggered by accessing `BaseModel` from the `pydantic` module. The import chain is:
+The crash occurs when Python attempts to compile/load `pydantic/_internal/_generate_schema.py`. The import chain is:
 
 ```
 from pydantic import BaseModel
@@ -30,7 +32,7 @@ from pydantic import BaseModel
   → import pydantic.main
   → import pydantic._internal._model_construction
   → import pydantic._internal._generate_schema
-  → [CRASH in pydantic_core]
+  → [CRASH in dlmalloc during bytecode compilation]
 ```
 
 ### WASM Backtrace
@@ -42,59 +44,91 @@ from pydantic import BaseModel
 ...
 ```
 
-Function 15532 is in `pydantic_core` (high function numbers indicate compiled C code). The crash is a WASM trap, not a Python exception.
+### Crash Details
+
+Function 15532 is **dlmalloc** (the WASM memory allocator). The crash is at:
+
+```
+a2c0f1: 20 01                      |  local.get 1
+a2c0f3: 28 02 04                   |  i32.load 2 4  <-- CRASH HERE
+```
+
+This is in a malloc freelist traversal loop. The crash happens when:
+1. Python compiles the 2884-line `_generate_schema.py`
+2. Compilation requires memory allocation
+3. The allocator attempts to traverse its freelist
+4. It encounters a corrupted or invalid pointer
+
+### What Was Ruled Out
+
+| Hypothesis | Status | Details |
+|------------|--------|---------|
+| Stack size too small | ❌ Ruled out | Tested with 100MB stack (`--max-stack 104857600`) |
+| Memory limit too small | ❌ Ruled out | Tested with 1GB memory (`--max-memory 1073741824`) |
+| pydantic_core import issue | ❌ Ruled out | All pydantic_core imports work fine |
+| Import chain issue | ❌ Ruled out | All imports work, crash is in file body |
+
+### Key Finding: File Complexity
+
+Through progressive testing with a simplified version of `_generate_schema.py`:
+
+| Test Version | Lines | Status |
+|--------------|-------|--------|
+| Minimal (just class stubs) | ~20 | ✅ Works |
+| With stdlib imports | ~50 | ✅ Works |
+| With pydantic_core imports | ~80 | ✅ Works |
+| With all imports + constants | ~214 | ✅ Works |
+| Full original file | 2884 | ❌ Crashes |
+
+**Conclusion**: The crash is triggered by Python's bytecode compilation of the full file body (functions and class definitions), not by the imports or constants.
 
 ### Versions Tested
 
 - pydantic: 2.12.5
 - pydantic_core: 2.41.5
 - Python: 3.13 (WASI build)
+- wasmtime: via wadup
 
 ## Investigation Steps
 
 ### 1. Initial Testing
-
 Confirmed that `import pydantic` works but `from pydantic import BaseModel` crashes.
 
-### 2. Import Chain Analysis
+### 2. Stack/Memory Testing
+Tested with dramatically increased stack (100MB) and memory (1GB) limits. Crash persisted, ruling out simple resource limits.
 
-Traced through pydantic's lazy import mechanism:
-- `pydantic/__init__.py` uses `__getattr__` for lazy loading
-- Accessing `BaseModel` triggers import of `pydantic.main`
-- `pydantic.main` has many module-level imports
+### 3. Import Chain Analysis
+Added debug print statements to trace the import chain:
+- All pydantic_core items import successfully
+- All pydantic internal modules import successfully
+- Crash occurs specifically on `_generate_schema` import
 
-### 3. Dependency Isolation
+### 4. Module Content Isolation
+Created progressively larger versions of `_generate_schema.py`:
+- Imports only: Works
+- Imports + constants: Works
+- Full file: Crashes
 
-Tested importing each dependency of `pydantic.main` individually:
+### 5. WASM Function Analysis
+Analyzed function 15532 using `wasm-objdump`:
+- Identified as dlmalloc memory allocator
+- Crash at offset 0xa2c0f3 (memory load in freelist traversal)
+- Indicates memory corruption during large allocation
 
-| Module | Status |
-|--------|--------|
-| `pydantic_core` | ✅ Works |
-| `typing_extensions` | ✅ Works |
-| `typing_inspection` | ✅ Works |
-| `pydantic.errors` | ✅ Works |
-| `pydantic.warnings` | ✅ Works |
-| `pydantic._internal._config` | ✅ Works |
-| `pydantic._internal._decorators` | ✅ Works |
-| `pydantic._internal._fields` | ✅ Works |
-| `pydantic._internal._model_construction` | ❌ Crashes |
+## Root Cause Theory
 
-### 4. Further Isolation
+The crash appears to be caused by memory corruption during Python's bytecode compilation of large/complex source files. When Python compiles `_generate_schema.py`:
 
-The crash in `_model_construction` is caused by its import of `_generate_schema`:
+1. Python's compiler parses the 2884-line file into an AST
+2. The AST is compiled into bytecode
+3. This process requires many memory allocations
+4. At some point, the allocator's internal state becomes corrupted
+5. A subsequent allocation crashes when traversing a corrupted freelist
 
-```python
-# pydantic/_internal/_model_construction.py line 25
-from ._generate_schema import GenerateSchema, InvalidSchemaError
-```
-
-### 5. Root Cause
-
-The crash appears to be in `pydantic_core` itself during schema generation initialization. This is likely caused by:
-
-1. **Memory/stack issues** - Schema generation may require more stack than WASM allows
-2. **Missing WASI syscalls** - The C code may call unsupported system functions
-3. **pydantic_core WASM build issue** - The WASI build of pydantic_core may have bugs
+This could be caused by:
+- A bug in the WASI Python build's memory handling
+- An edge case in dlmalloc when handling many allocations
+- Insufficient memory initialization in WASM startup
 
 ## Recommendations
 
@@ -117,21 +151,22 @@ validated = validator.validate_python({'name': 'Alice', 'age': 30})
 
 ### Long Term Options
 
-1. **Investigate pydantic_core WASM build** - Debug the C extension compilation
-2. **Try older pydantic versions** - Earlier versions may work better
-3. **Increase WASM stack/memory limits** - May help if it's a resource issue
-4. **Report to pydantic team** - This may be a known WASI compatibility issue
+1. **Report to CPython/WASI team** - This appears to be a Python WASI build issue with large file compilation
+2. **Split _generate_schema.py** - Breaking up the large file might work around the issue
+3. **Pre-compile bytecode** - Ship .pyc files instead of .py to avoid runtime compilation
+4. **Investigate allocator configuration** - dlmalloc may have configurable parameters that affect this behavior
 
 ## Files Changed
 
 - `examples/python-pydantic-test/` - Test module for investigation
+- `crates/wadup-core/src/wasm.rs` - Added stderr logging on errors
 - Current test uses `pydantic_core` directly (working solution)
 
 ## Related Issues
 
-- pydantic uses `importlib.metadata` which can be slow/problematic in WASI
-- The crash is in compiled C code, not Python, making debugging difficult
-- WASM function 15532 is in pydantic_core but without debug symbols we can't identify the exact location
+- The crash is in compiled C code (dlmalloc), not pydantic_core
+- WASM function 15532 is the memory allocator, not pydantic-specific code
+- The issue may affect other large Python files, not just pydantic
 
 ## Date
 
