@@ -276,18 +276,18 @@ Language-specific libraries for WASM module authors:
 - **SubContent API**: `SubContent::emit_bytes()`, `SubContent::emit_slice()`
 - Automatic flush on module completion
 
-**python-wadup-guest** (Python):
+**guest/python** (Python):
 - Pure-Python `wadup` library providing `wadup.define_table()`, `wadup.insert_row()`, and `wadup.flush()`
 - File-based communication (writes JSON to `/metadata/*.json`)
 - Bundled into WASM modules along with project source and dependencies
 - Supports pure-Python third-party dependencies (e.g., `chardet`, `humanize`)
 
-**go-wadup-guest** (Go):
+**guest/go** (Go):
 - File-based metadata output (writes JSON to `/metadata/*.json`)
 - Table builder API: `wadup.NewTableBuilder("name").Column(...).Build()`
 - Value types: `wadup.NewInt64()`, `wadup.NewString()`, `wadup.NewFloat64()`
 
-**csharp-wadup-guest** (C#):
+**guest/csharp** (C#):
 - File-based metadata output (writes JSON to `/metadata/*.json`)
 - File-based sub-content emission (writes JSON to `/subcontent/*.json`)
 - Table builder API: `new TableBuilder("name").AddColumn(...).Build()`
@@ -549,7 +549,7 @@ make
 - Incremental flushing supported (process metadata immediately on file close)
 - Uses command pattern (module reloaded for each file)
 
-**Important**: C# modules use file-based communication because .NET WASI SDK doesn't support custom WASM imports. The `csharp-wadup-guest` library handles JSON serialization and file management.
+**Important**: C# modules use file-based communication because .NET WASI SDK doesn't support custom WASM imports. The `guest/csharp` library handles JSON serialization and file management.
 
 See [examples/csharp-json-analyzer/README.md](examples/csharp-json-analyzer/README.md) for complete guide and API reference.
 

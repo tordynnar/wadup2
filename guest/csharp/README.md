@@ -18,7 +18,7 @@ Reference the project in your `.csproj` file:
 
 ```xml
 <ItemGroup>
-  <ProjectReference Include="../../csharp-wadup-guest/CSharpWadupGuest.csproj" />
+  <ProjectReference Include="../../guest/csharp/CSharpWadupGuest.csproj" />
 </ItemGroup>
 ```
 
@@ -272,7 +272,7 @@ See `examples/csharp-json-analyzer/` for a complete example using this library.
 ## Files
 
 ```
-csharp-wadup-guest/
+guest/csharp/
 ├── README.md                 # This file
 ├── CSharpWadupGuest.csproj   # Project file
 ├── Table.cs                  # TableBuilder, Table, MetadataWriter
@@ -283,7 +283,7 @@ csharp-wadup-guest/
 
 ## Related
 
-- [csharp-json-analyzer](../examples/csharp-json-analyzer/) - Example C# module
-- [go-wadup-guest](../go-wadup-guest/) - Go equivalent library
-- [python-wadup-guest](../python-wadup-guest/) - Python equivalent library
-- [wadup-guest](../crates/wadup-guest/) - Rust equivalent library
+- [csharp-json-analyzer](../../examples/csharp-json-analyzer/) - Example C# module
+- [guest/go](../go/) - Go equivalent library
+- [guest/python](../python/) - Python equivalent library
+- [wadup-guest](../../crates/wadup-guest/) - Rust equivalent library

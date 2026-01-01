@@ -12,7 +12,7 @@ DOTNET := dotnet
 all: $(TARGET)
 
 # Build C# WASM module
-$(TARGET): Program.cs JsonAnalyzer.cs CSharpJsonAnalyzer.csproj ../../csharp-wadup-guest/*.cs
+$(TARGET): Program.cs JsonAnalyzer.cs CSharpJsonAnalyzer.csproj ../../guest/csharp/*.cs
 	@echo "Building C# WASM module with .NET $(shell $(DOTNET) --version) and Wasi.Sdk..."
 	$(DOTNET) build -c Release
 	@mkdir -p $(TARGET_DIR)

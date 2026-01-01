@@ -20,6 +20,6 @@
     <PackageReference Include="Wasi.Sdk" Version="0.1.4-preview.10020" />
 
     <!-- Shared guest library (at repository root) -->
-    <ProjectReference Include="../../csharp-wadup-guest/CSharpWadupGuest.csproj" />
+    <ProjectReference Include="../../guest/csharp/CSharpWadupGuest.csproj" />
   </ItemGroup>
 </Project>

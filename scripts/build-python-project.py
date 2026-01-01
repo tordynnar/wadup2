@@ -380,7 +380,7 @@ def main() -> int:
 
         # Copy wadup library
         print_info("Bundling wadup library...")
-        shutil.copytree(wadup_root / "python-wadup-guest" / "wadup", bundle_dir / "wadup")
+        shutil.copytree(wadup_root / "guest" / "python" / "wadup", bundle_dir / "wadup")
 
         # Copy project source
         print_info("Bundling project source...")
@@ -492,7 +492,7 @@ def main() -> int:
         wasi_emu_libs = wasi_sysroot / "lib" / "wasm32-wasip1"
 
         # Generate main_bundled.c from template with extension registrations
-        main_c_template = wadup_root / "python-wadup-guest" / "src" / "main_bundled_template.c"
+        main_c_template = wadup_root / "guest" / "python" / "src" / "main_bundled_template.c"
         main_c_dst = build_dir / "main_bundled.c"
         generate_main_bundled_c(c_extensions, main_c_template, main_c_dst)
 

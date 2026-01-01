@@ -10,7 +10,7 @@ This example demonstrates how to build WASM modules for WADUP using **standard G
 - Pure Go SQLite library (`github.com/ncruces/go-sqlite3`) - no CGO required
 - Reactor pattern with `process` export (module reuse like Rust/Python)
 - Proper WASI filesystem access for SQLite databases
-- Using the shared `go-wadup-guest` library for host FFI
+- Using the shared `guest/go` library for host FFI
 
 ## What It Does
 
@@ -100,10 +100,10 @@ Direct path access (`/data.bin`) may fail with WASI filesystem constraints.
 
 ### WADUP Guest Library
 
-Import the shared `go-wadup-guest` library for host FFI:
+Import the shared `guest/go` library for host FFI:
 
 ```go
-import "github.com/tordynnar/wadup2/go-wadup-guest"
+import "github.com/tordynnar/wadup2/guest/go"
 ```
 
 The library provides:
@@ -243,7 +243,7 @@ examples/go-sqlite-parser/
 ### Direct Dependencies
 
 - `github.com/ncruces/go-sqlite3` v0.13.0 - Pure Go SQLite
-- `github.com/tordynnar/wadup2/go-wadup-guest` v0.0.0 - WADUP FFI
+- `github.com/tordynnar/wadup2/guest/go` v0.0.0 - WADUP FFI
 
 ### Indirect Dependencies
 
@@ -292,11 +292,11 @@ db, err := sql.Open("sqlite3", "/data.bin")
 db, err := sql.Open("sqlite3", "file:/data.bin?mode=ro&immutable=1")
 ```
 
-### Import errors for go-wadup-guest
+### Import errors for guest/go
 
 The `go.mod` should have a `replace` directive:
 ```go
-replace github.com/tordynnar/wadup2/go-wadup-guest => ../../go-wadup-guest
+replace github.com/tordynnar/wadup2/guest/go => ../../guest/go
 ```
 
 Run `go mod tidy` if needed.
@@ -328,7 +328,7 @@ Earlier versions don't have `wasip1` target.
 
 - [Go WASI Support](https://go.dev/blog/wasi)
 - [go-sqlite3 Documentation](https://github.com/ncruces/go-sqlite3)
-- [WADUP Guest Library](../../go-wadup-guest/)
+- [WADUP Guest Library](../../guest/go/)
 - [WADUP Architecture](../../docs/architecture.md)
 
 ## License

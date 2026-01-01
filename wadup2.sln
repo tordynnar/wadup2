@@ -2,11 +2,11 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "csharp-wadup-guest", "csharp-wadup-guest", "{48E34F2E-DC59-E8D6-1605-AC9738AFACEA}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "guest", "guest", "{48E34F2E-DC59-E8D6-1605-AC9738AFACEA}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "examples", "examples", "{B36A84DF-456D-A817-6EDD-3EC3E7F6E11F}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CSharpWadupGuest", "csharp-wadup-guest\CSharpWadupGuest.csproj", "{44BDFA61-C8BF-BF80-017C-B9A5F6E67C3E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CSharpWadupGuest", "guest\csharp\CSharpWadupGuest.csproj", "{44BDFA61-C8BF-BF80-017C-B9A5F6E67C3E}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "csharp-json-analyzer", "csharp-json-analyzer", "{74AC61BE-1E1A-D194-C3C1-18EA321212C7}"
 EndProject

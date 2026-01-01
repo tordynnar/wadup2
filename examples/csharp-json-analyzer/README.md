@@ -10,7 +10,7 @@ This example demonstrates how to build WASM modules for WADUP using **.NET 8** w
 - Single-file WASM bundling with `WasmSingleFileBundle`
 - Command pattern with `_start` export (module reinstantiated per file)
 - File-based metadata communication (no custom imports required)
-- Using the shared `csharp-wadup-guest` library for metadata output
+- Using the shared `guest/csharp` library for metadata output
 
 ## What It Does
 
@@ -114,7 +114,7 @@ public static int Main()
 
 ### WADUP Guest Library
 
-Import the shared `csharp-wadup-guest` library:
+Import the shared `guest/csharp` library:
 
 ```csharp
 using CSharpWadupGuest;
@@ -288,7 +288,7 @@ examples/csharp-json-analyzer/
 └── target/
     └── csharp_json_analyzer.wasm  # Compiled module
 
-csharp-wadup-guest/            # Shared library
+guest/csharp/            # Shared library
 ├── CSharpWadupGuest.csproj
 ├── Table.cs                   # TableBuilder, MetadataWriter
 ├── SubContent.cs              # SubContentWriter for sub-content emission
@@ -306,7 +306,7 @@ csharp-wadup-guest/            # Shared library
 
 ### Project Reference
 
-- `csharp-wadup-guest` - WADUP metadata library
+- `guest/csharp` - WADUP metadata library
 
 ## Comparison: C# vs Rust vs Python vs Go
 
@@ -388,7 +388,7 @@ Ensure you call `MetadataWriter.Flush()` at the end of processing.
 - [.NET WASI Documentation](https://github.com/AzCiS/dotnet-wasi-sdk)
 - [Wasi.Sdk NuGet](https://www.nuget.org/packages/Wasi.Sdk)
 - [System.Text.Json Documentation](https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-overview)
-- [WADUP Guest Library](../../csharp-wadup-guest/)
+- [WADUP Guest Library](../../guest/csharp/)
 
 ## License
 
