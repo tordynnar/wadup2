@@ -974,6 +974,14 @@ impl ModuleInstance {
                 anyhow::bail!("Module '{}' returned error code: {}", self.name, code)
             }
             Err(e) => {
+                // Log stdout/stderr if present for debugging (before error classification)
+                if !stdout.is_empty() {
+                    tracing::info!("Module '{}' stdout: {}", self.name, stdout);
+                }
+                if !stderr.is_empty() {
+                    tracing::warn!("Module '{}' stderr: {}", self.name, stderr);
+                }
+
                 let error_msg = e.to_string();
                 if error_msg.contains("fuel") || error_msg.contains("out of fuel") {
                     anyhow::bail!("Module '{}' exceeded fuel limit (CPU limit)", self.name)
