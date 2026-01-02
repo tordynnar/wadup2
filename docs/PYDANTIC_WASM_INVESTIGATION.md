@@ -1,18 +1,23 @@
 # Pydantic WASM Investigation
 
-This document details the investigation into why Python modules crashed when loaded from zipfiles in WASI/WASM, and the fix that was applied.
+This document details the investigation into why Python modules crashed when loaded from zipfiles in WASI/WASM, and the fixes that were applied.
 
 ## Summary
 
-**Status**: ✅ FIXED (January 2026)
+**Status**: ✅ FULLY FIXED (January 2026)
 
-**Root Cause**: Using `snprintf` before calling `PyRun_SimpleString` caused memory corruption when Python imported modules from a zipfile. This was a bug in the interaction between the C standard library's `snprintf` and Python's WASI build.
+Two issues were discovered and fixed:
+
+1. **snprintf memory corruption** - Using `snprintf` before `PyRun_SimpleString` caused memory corruption
+2. **Bytecode compilation crash** - Large Python files (like pydantic's `_generate_schema.py`) crashed during runtime bytecode compilation
+
+## Fix 1: snprintf Memory Corruption
+
+**Root Cause**: Using `snprintf` before calling `PyRun_SimpleString` caused memory corruption when Python imported modules from a zipfile.
 
 **Fix**: Replace runtime `snprintf` string formatting with compile-time C preprocessor string concatenation.
 
-## The Fix
-
-In `guest/python/src/main_bundled_template.c`, the original code used:
+In `guest/python/src/main_bundled_template.c`, changed from:
 
 ```c
 // BROKEN - causes memory corruption
@@ -23,7 +28,7 @@ snprintf(cmd, sizeof(cmd),
 PyRun_SimpleString(cmd);
 ```
 
-The fix uses compile-time string concatenation instead:
+To:
 
 ```c
 // FIXED - uses preprocessor string concatenation
@@ -31,80 +36,75 @@ The fix uses compile-time string concatenation instead:
 PyRun_SimpleString(IMPORT_CMD);
 ```
 
+## Fix 2: Pre-compile Python to Bytecode
+
+**Root Cause**: Python's bytecode compiler crashes in WASI when compiling complex files at runtime. The crash occurs in dlmalloc (the WASM memory allocator) when compiling files with many if/elif branches (like pydantic's `_generate_schema.py` with 49+ branches).
+
+**Fix**: Pre-compile all Python files to `.pyc` bytecode during the build process, and remove the source `.py` files from the bundle. This forces Python to use the pre-compiled bytecode instead of compiling at runtime.
+
+In `scripts/build-python-project.py`:
+
+```python
+# Pre-compile all Python files to .pyc
+compileall.compile_dir(bundle_dir, force=True, quiet=1, legacy=True)
+
+# Remove .py files to force Python to use .pyc files
+# zipimport prefers .py files when both exist, so we remove .py
+for py_file in list(bundle_dir.rglob('*.py')):
+    pyc_file = py_file.with_suffix('.pyc')
+    if pyc_file.exists():
+        py_file.unlink()
+```
+
 ## Technical Details
 
 ### Symptoms
 
-When loading Python modules from a zipfile (via `sys.path.insert(0, '/app/modules.zip')`), the crash occurred:
-1. Only when using `snprintf` to build the import command string
-2. Only when the imported module loaded sub-modules with complex code (28+ if/elif branches)
-3. The crash was in dlmalloc (the WASM memory allocator) with "memory fault at wasm address"
+When loading Python modules from a zipfile:
+1. Simple modules with < 28 if/elif branches worked after the snprintf fix
+2. Complex modules like pydantic's `_generate_schema.py` (49+ branches) still crashed
+3. The crash was in dlmalloc during bytecode compilation, before any Python code executed
 
-### What Was Ruled Out
+### Why Pre-compilation Works
 
-Through extensive testing, the following were ruled out as causes:
+- Python's bytecode compiler in WASI has issues with complex control flow
+- The crash occurs in dlmalloc, suggesting memory allocation issues during compilation
+- Pre-compiled `.pyc` files bypass the runtime compiler entirely
+- The host Python (used during build) handles the compilation correctly
 
-| Hypothesis | Status | Details |
-|------------|--------|---------|
-| Python's frozen zipimport module | ❌ Ruled out | Official Python WASM works fine with same zipfile |
-| pydantic_core C extension | ❌ Ruled out | Crash happened without any C extensions |
-| lxml C extension | ❌ Ruled out | Crash happened without any C extensions |
-| Reactor-style entry (`--no-entry`) | ❌ Ruled out | Crash happened with normal entry too |
-| WASI SDK 29 vs 24 | ❌ Ruled out | Both SDKs had the issue |
-| Stack/memory limits | ❌ Ruled out | Tested with 100MB stack, 1GB memory |
+### Key Insight
 
-### The Discovery Process
-
-1. **Comparison testing** - Discovered that official Python WASM handled the same zipfile import perfectly
-2. **Code structure analysis** - Found that using literal strings worked, but `snprintf`-built strings caused crashes
-3. **Minimal reproduction** - Created test cases showing:
-   - `PyRun_SimpleString("import module; module.main()")` → ✅ Works
-   - `snprintf(cmd, ...); PyRun_SimpleString(cmd);` → ❌ Crashes
-
-### Why snprintf Causes the Problem
-
-The exact mechanism is unclear, but the issue appears to be memory corruption that occurs when:
-1. `snprintf` writes to a stack-allocated buffer
-2. The buffer is then passed to `PyRun_SimpleString`
-3. Python's import machinery (specifically zipimport) allocates memory
-4. The allocator encounters corrupted freelist pointers
-
-This is likely a bug in:
-- The WASI libc's `snprintf` implementation, OR
-- Python's memory allocator's interaction with stack-allocated strings in WASI
+The crash happened before any Python code executed - even debug print statements at the top of `_generate_schema.py` never ran. This proved the issue was in the bytecode compilation phase, not in the code itself.
 
 ## Testing
 
-The fix was verified by:
-1. Rebuilding the python-large-file-test example
-2. Running integration tests - 10 of 11 pass (pydantic test has unrelated issue)
-3. Testing with wadup CLI - modules load and execute correctly
+All 11 integration tests now pass:
 
 ```bash
-# Test command
-./target/release/wadup run \
-  --modules /tmp/test/modules \
-  --input /tmp/test/input \
-  --output /tmp/test/output.db
+./scripts/run-integration-tests.sh
 
-# Output shows successful execution:
-# DEBUG: large_module imported successfully!
-# SUCCESS!
+# Output:
+# ⏱️  test_python_pydantic passed in 1.83s
+# ...
+# Tests passed: 11
+# Tests failed: 0
 ```
 
-## Workaround for Similar Issues
+The pydantic test now uses full `pydantic.BaseModel`:
 
-If you encounter similar crashes in WASI/Python builds:
+```python
+from pydantic import BaseModel
 
-1. **Avoid `snprintf` before Python calls** - Use compile-time string concatenation instead
-2. **Use string literals** - Prefer `"literal"` over dynamically built strings
-3. **Check for memory corruption patterns** - Crashes in dlmalloc freelist traversal indicate this issue
+class User(BaseModel):
+    name: str
+    age: int
+    email: str
 
-## Remaining Issues
-
-The pydantic test still fails with "Table 'users' not found" - this is a separate issue unrelated to the memory corruption fix.
+user = User(name="Alice", age=30, email="alice@example.com")
+```
 
 ## Date
 
 - Investigation conducted: January 2026
-- Fix applied: January 2, 2026
+- snprintf fix applied: January 2, 2026
+- Pre-compilation fix applied: January 2, 2026

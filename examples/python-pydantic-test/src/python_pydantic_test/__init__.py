@@ -1,34 +1,22 @@
-"""Test pydantic_core validation in WADUP.
+"""Test pydantic BaseModel in WADUP.
 
-NOTE: Full pydantic (BaseModel) cannot be used in WASI due to a crash
-when loading pydantic/_internal/_generate_schema.py. This test uses
-pydantic_core directly, which works correctly.
+This test verifies that full pydantic BaseModel works correctly.
+Pydantic is pre-compiled to .pyc to avoid runtime bytecode compilation crashes.
 """
 
-import sys
-print("DEBUG: Module loading", file=sys.stderr, flush=True)
-
 import wadup
-print("DEBUG: wadup imported", file=sys.stderr, flush=True)
-
+from pydantic import BaseModel
 import pydantic_core
-from pydantic_core import SchemaValidator, core_schema
-print("DEBUG: pydantic_core imported", file=sys.stderr, flush=True)
+
+
+class User(BaseModel):
+    name: str
+    age: int
+    email: str
 
 
 def main():
-    """Test pydantic_core validation functionality."""
-    print("DEBUG: main() called", file=sys.stderr, flush=True)
-
-    # Define a User schema using pydantic_core directly
-    user_schema = core_schema.typed_dict_schema({
-        'name': core_schema.typed_dict_field(core_schema.str_schema()),
-        'age': core_schema.typed_dict_field(core_schema.int_schema(ge=0)),
-        'email': core_schema.typed_dict_field(core_schema.str_schema()),
-    })
-
-    validator = SchemaValidator(user_schema)
-
+    """Test pydantic BaseModel functionality."""
     # Create test users
     users_data = [
         {"name": "Alice", "age": 30, "email": "alice@example.com"},
@@ -50,10 +38,9 @@ def main():
     # Validate and insert users
     validated_users = []
     for user_data in users_data:
-        validated = validator.validate_python(user_data)
-        validated_users.append(validated)
-        wadup.insert_row("users", [validated['name'], validated['age'], validated['email']])
-        print(f"DEBUG: Validated user: {validated['name']}", file=sys.stderr, flush=True)
+        user = User(**user_data)
+        validated_users.append(user)
+        wadup.insert_row("users", [user.name, user.age, user.email])
 
     # Record status
     wadup.insert_row("info", ["status", "success"])
@@ -61,4 +48,3 @@ def main():
     wadup.insert_row("info", ["users_validated", str(len(validated_users))])
 
     wadup.flush()
-    print("DEBUG: All done!", file=sys.stderr, flush=True)
