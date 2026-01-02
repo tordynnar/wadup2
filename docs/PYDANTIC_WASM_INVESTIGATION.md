@@ -10,6 +10,18 @@ This document details the investigation into why the full `pydantic` library (sp
 
 **Workaround**: Use `pydantic_core` directly instead of the high-level `pydantic` API.
 
+### Key Findings
+
+| Test | Result |
+|------|--------|
+| 100MB stack size (`--max-stack 104857600`) | ❌ Still crashes |
+| 1GB memory limit (`--max-memory 1073741824`) | ❌ Still crashes |
+| All pydantic_core imports | ✅ Work fine |
+| All pydantic internal module imports | ✅ Work fine |
+| `_generate_schema.py` imports only (~80 lines) | ✅ Works |
+| `_generate_schema.py` imports + constants (~214 lines) | ✅ Works |
+| Full `_generate_schema.py` (2884 lines) | ❌ Crashes |
+
 ## What Works
 
 | Import | Status | Notes |
