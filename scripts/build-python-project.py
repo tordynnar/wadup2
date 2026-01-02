@@ -520,6 +520,8 @@ def main() -> int:
             "-Wl,--initial-memory=134217728",  # 128 MB
             "-Wl,--max-memory=268435456",      # 256 MB
             "-Wl,--no-entry",
+            "-z", "stack-size=8388608",        # 8 MB stack (same as official CPython WASI)
+            "-Wl,--stack-first",               # Critical: place stack before data to prevent corruption
         ]
         wasi_emu_libs = wasi_sysroot / "lib" / "wasm32-wasip1"
 
