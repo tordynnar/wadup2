@@ -103,8 +103,37 @@ class User(BaseModel):
 user = User(name="Alice", age=30, email="alice@example.com")
 ```
 
+## Root Cause Analysis
+
+### WASI SDK Version Difference
+
+Further investigation revealed that the bytecode compilation crash is related to **WASI SDK version**:
+
+| Python Build | WASI SDK | Complex Bytecode Compilation |
+|--------------|----------|------------------------------|
+| Official Python WASI | 24 | ✅ Works |
+| WADUP's Python | 29 | ❌ Crashes in dlmalloc |
+
+**Test methodology:**
+1. Created a test module with 50 if/elif branches
+2. Tested with official Python WASI (SDK 24) - imported from zipfile successfully
+3. Tested WADUP module (SDK 29) with wasmtime CLI - crashed in dlmalloc
+
+**Key findings:**
+- The crash occurs with wasmtime CLI directly, not just through WADUP's Rust code
+- The crash is in `dlmalloc` (WASM function 15532) during bytecode compilation
+- Official Python WASI handles the same code without issues
+
+**Likely cause:** A regression or bug in WASI SDK 29's memory allocator (dlmalloc) that affects Python's bytecode compiler when handling complex control flow structures.
+
+**Potential fixes (not yet implemented):**
+1. Downgrade to WASI SDK 24 for Python builds
+2. Report bug to WASI SDK project
+3. Use alternative allocator
+
 ## Date
 
 - Investigation conducted: January 2026
 - snprintf fix applied: January 2, 2026
 - Pre-compilation fix applied: January 2, 2026
+- WASI SDK root cause identified: January 2, 2026

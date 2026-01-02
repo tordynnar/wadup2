@@ -452,28 +452,33 @@ def main() -> int:
 
         # Pre-compile all Python files to .pyc
         # This avoids runtime bytecode compilation which can crash in WASI
-        print_info("Pre-compiling Python files...")
-        import py_compile
-        import compileall
+        # NOTE: Set WADUP_SKIP_PRECOMPILE=1 to skip pre-compilation for debugging
+        import os
+        if os.environ.get('WADUP_SKIP_PRECOMPILE') != '1':
+            print_info("Pre-compiling Python files...")
+            import py_compile
+            import compileall
 
-        # Use compileall to compile all .py files in bundle_dir
-        # legacy=True puts .pyc files next to .py files (not in __pycache__)
-        compileall.compile_dir(bundle_dir, force=True, quiet=1, legacy=True)
+            # Use compileall to compile all .py files in bundle_dir
+            # legacy=True puts .pyc files next to .py files (not in __pycache__)
+            compileall.compile_dir(bundle_dir, force=True, quiet=1, legacy=True)
 
-        # Count compiled files
-        pyc_count = len(list(bundle_dir.rglob('*.pyc')))
-        print_success(f"Pre-compiled {pyc_count} Python files")
+            # Count compiled files
+            pyc_count = len(list(bundle_dir.rglob('*.pyc')))
+            print_success(f"Pre-compiled {pyc_count} Python files")
 
-        # Remove .py files to force Python to use .pyc files
-        # zipimport prefers .py files when both exist, so we remove .py
-        print_info("Removing .py source files (keeping only .pyc)...")
-        py_removed = 0
-        for py_file in list(bundle_dir.rglob('*.py')):
-            pyc_file = py_file.with_suffix('.pyc')
-            if pyc_file.exists():
-                py_file.unlink()
-                py_removed += 1
-        print_success(f"Removed {py_removed} .py files")
+            # Remove .py files to force Python to use .pyc files
+            # zipimport prefers .py files when both exist, so we remove .py
+            print_info("Removing .py source files (keeping only .pyc)...")
+            py_removed = 0
+            for py_file in list(bundle_dir.rglob('*.py')):
+                pyc_file = py_file.with_suffix('.pyc')
+                if pyc_file.exists():
+                    py_file.unlink()
+                    py_removed += 1
+            print_success(f"Removed {py_removed} .py files")
+        else:
+            print_warning("Skipping pre-compilation (WADUP_SKIP_PRECOMPILE=1)")
 
         # Create zip bundle
         print_info("Creating bundle.zip...")
