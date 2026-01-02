@@ -25,6 +25,7 @@ deps/*
 examples/python-*/src/*.o
 examples/python-*/src/script.py.h
 examples/python-*/target/
+dist/
 
 # Test outputs
 test-modules/
@@ -52,6 +53,7 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+official/
 
 # Claude
 .claude
