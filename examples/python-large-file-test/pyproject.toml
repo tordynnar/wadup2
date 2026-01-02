@@ -1,0 +1,15 @@
+[project]
+name = "python-large-file-test"
+version = "0.1.0"
+description = "Test large if/elif chain"
+requires-python = ">=3.11"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/python_large_file_test"]
+
+[tool.wadup]
+entry-point = "python_large_file_test"
