@@ -6,59 +6,52 @@ This document details the investigation into why the full `pydantic` library (sp
 
 **Status**: The full pydantic library cannot be used in WASI due to a crash during Python bytecode compilation.
 
-**Root Cause**: The crash occurs in the WASM memory allocator (dlmalloc, function 15532) during Python's bytecode compilation phase. **The specific trigger is methods with 28 or more if/elif branches.** The `match_type` method in `_generate_schema.py` has over 100 branches, which triggers the crash.
+**Root Cause**: The crash occurs in Python's **zipimport** when loading a sub-module from within a package stored in a zipfile. The specific trigger is **methods with 28+ if/elif branches in an imported sub-module** (not in `__init__.py`).
 
 **Workaround**: Use `pydantic_core` directly instead of the high-level `pydantic` API.
 
-### Key Findings
+### Key Findings (Updated January 2026)
 
 | Test | Result |
 |------|--------|
-| 100MB stack size (`--max-stack 104857600`) | ❌ Still crashes |
-| 1GB memory limit (`--max-memory 1073741824`) | ❌ Still crashes |
-| All pydantic_core imports | ✅ Work fine |
-| All pydantic internal module imports | ✅ Work fine |
-| `_generate_schema.py` imports only (~80 lines) | ✅ Works |
-| `_generate_schema.py` imports + constants (~214 lines) | ✅ Works |
-| Full `_generate_schema.py` (2884 lines) | ❌ Crashes |
-| **Method with 27 if/elif branches** | ✅ Works |
-| **Method with 28 if/elif branches** | ❌ Crashes |
+| 28 if/elif branches in `__init__.py` | ✅ Works |
+| 28 if/elif branches in imported sub-module | ❌ Crashes |
+| Module without C extensions (no pydantic_core, no lxml) | ❌ Still crashes |
+| Module with only pydantic_core | ❌ Still crashes |
+| Normal entry point (main calls code directly) | ❌ Still crashes |
+| Reactor-style entry point (`--invoke process`) | ❌ Still crashes |
 
-### Minimal Reproduction with wasmtime CLI
+**The crash is caused by zipimport loading sub-modules, NOT by C extensions or entry point style.**
 
-The crash can be reproduced with wasmtime directly:
+### Precise Trigger
+
+The crash occurs when ALL of these conditions are met:
+1. Python code is loaded from a **zipfile** (via `sys.path.insert(0, '/app/modules.zip')`)
+2. A package's `__init__.py` **imports a sub-module** (e.g., `from mypackage import submodule`)
+3. That **sub-module** contains a method with **28+ if/elif branches**
+
+Code directly in `__init__.py` does NOT crash, even with 100+ if/elif branches.
+
+### Minimal Reproduction
 
 ```bash
-# Run the wadup-built module
-wasmtime run \
-  --dir=/tmp/wasm-app::/app \
-  --invoke process \
+# This CRASHES - sub-module import with 28 branches
+mkdir -p /tmp/wasm-app
+wasmtime run --dir=/tmp/wasm-app::/app \
   examples/python-large-file-test/target/python_large_file_test.wasm
+
+# This WORKS - same code directly in __init__.py
+wasmtime run --dir=/tmp/wasm-app::/app \
+  examples/python-large-file-test/target/test_inline.wasm
 ```
-
-The crash occurs when the module tries to import `large_module.py` which contains a method with 28 if/elif branches.
-
-### Key Finding: Crash is wadup-specific
-
-**Important:** The same Python code runs successfully with standalone Python WASM:
-
-```bash
-# This WORKS - same code, standalone Python
-wasmtime run \
-  --dir=. \
-  --dir=/tmp \
-  --env PYTHONPATH=/lib/python3.13 \
-  official/python-3.13.0-wasi_sdk-24/python.wasm -- /tmp/large_module.py
-```
-
-The crash only occurs in wadup-built modules, which include:
-- pydantic_core C extension
-- Custom zipimport-based module loading
-- C main.c entry point with process() function
 
 ### Crashing Code Pattern
 
 ```python
+# mypackage/__init__.py
+from mypackage import large_module  # <-- Importing sub-module triggers crash
+
+# mypackage/large_module.py
 class CrashTrigger:
     def method_with_many_branches(self, obj: Any) -> str:
         if obj == 0:
@@ -67,11 +60,19 @@ class CrashTrigger:
             return "case_1"
         # ... 25 more elif branches ...
         elif obj == 27:
-            return "case_27"
+            return "case_27"  # 28th branch - CRASH!
         return "default"
 ```
 
-**The crash occurs at exactly 28 if/elif branches in wadup modules.** 27 branches works fine.
+### What Was Ruled Out
+
+| Hypothesis | Status | Details |
+|------------|--------|---------|
+| pydantic_core C extension | ❌ Ruled out | Crash happens without any C extensions |
+| lxml C extension | ❌ Ruled out | Crash happens without any C extensions |
+| Reactor-style entry (`--no-entry`) | ❌ Ruled out | Crash happens with normal entry too |
+| wadup library in bundle | ❌ Ruled out | Crash happens without wadup library |
+| Stack/memory limits | ❌ Ruled out | Tested with 100MB stack, 1GB memory |
 
 ## What Works
 
@@ -191,24 +192,34 @@ Created minimal test case without pydantic:
 - Found: 27 branches works, 28 branches crashes
 - Confirmed with 76-line minimal reproduction file
 
-## Root Cause: wadup-specific Build Issue
+## Root Cause: zipimport Sub-Module Loading Bug
 
-The crash is specific to wadup-built Python WASM modules. **The same Python code works fine with standalone Python WASM.**
+The crash is caused by a bug in Python's **zipimport** module when loading sub-modules from packages stored in zipfiles.
 
-**Specific trigger in wadup modules**: Methods with **28 or more if/elif branches** crash during bytecode compilation.
+**Specific trigger**: When a package's `__init__.py` imports a sub-module, and that sub-module contains a method with **28+ if/elif branches**, the crash occurs during bytecode compilation.
 
-The crash occurs in dlmalloc when:
-1. Python's compiler generates bytecode for a method with 28+ if/elif branches
-2. The bytecode compiler allocates memory for the branch table
-3. dlmalloc's freelist traversal encounters an invalid pointer
-4. The `i32.load` instruction at offset 0xa2c0f3 dereferences the invalid pointer
+### Why It Only Affects wadup Modules
 
-The root cause appears to be related to how wadup builds Python WASM modules:
-- **pydantic_core C extension** - May interfere with memory allocation
-- **zipimport-based loading** - Modules are loaded from /app/modules.zip
-- **Custom entry point** - C main.c with process() function
+wadup bundles Python code into `/app/modules.zip` and adds it to `sys.path`:
+```python
+sys.path.insert(0, '/app/modules.zip')
+```
 
-The standalone Python WASM (`official/python-3.13.0-wasi_sdk-24/python.wasm`) handles the same Python code without issues, confirming this is a wadup build issue, not a general Python WASI issue.
+This causes Python to use **zipimport** to load modules. The bug is specifically in zipimport's sub-module loading path - it doesn't affect:
+- Code in `__init__.py` (loaded differently)
+- Modules loaded from filesystem (not zipimport)
+- Standalone Python WASM (loads from filesystem)
+
+### Technical Details
+
+The crash occurs in dlmalloc (WASM function 15532) when:
+1. zipimport loads a sub-module from a package in the zipfile
+2. Python compiles the sub-module's bytecode
+3. The bytecode compiler allocates memory for a method with 28+ branches
+4. dlmalloc's freelist traversal encounters an invalid pointer
+5. The `i32.load` instruction dereferences the corrupted pointer
+
+The root cause is likely memory corruption in zipimport's code path that doesn't occur when loading from the filesystem or when loading `__init__.py` files.
 
 ## Recommendations
 
@@ -229,12 +240,23 @@ validator = SchemaValidator(user_schema)
 validated = validator.validate_python({'name': 'Alice', 'age': 30})
 ```
 
-### Long Term Options
+### Potential Workarounds
 
-1. **Report to CPython/WASI team** - This appears to be a Python WASI build issue with large file compilation
-2. **Split _generate_schema.py** - Breaking up the large file might work around the issue
-3. **Pre-compile bytecode** - Ship .pyc files instead of .py to avoid runtime compilation
-4. **Investigate allocator configuration** - dlmalloc may have configurable parameters that affect this behavior
+1. **Pre-compile bytecode** - Ship `.pyc` files instead of `.py` to avoid runtime compilation
+2. **Load from filesystem** - Extract modules to filesystem instead of loading from zipfile
+3. **Inline code in `__init__.py`** - Move code from sub-modules into `__init__.py` (works but impractical for large libraries)
+4. **Refactor large if/elif chains** - Convert to dictionary dispatch:
+   ```python
+   # Instead of 28 if/elif branches:
+   dispatch = {0: "a", 1: "b", ...}
+   return dispatch.get(x, "default")
+   ```
+
+### Long Term Fix
+
+1. **Report to CPython WASI team** - This is a bug in Python's zipimport for WASI
+2. **Investigate frozen zipimport** - The issue may be in the frozen `zipimport` module in libpython
+3. **Test with newer Python versions** - May be fixed in future Python releases
 
 ## Files Changed
 
@@ -249,38 +271,32 @@ validated = validator.validate_python({'name': 'Alice', 'age': 30})
 
 ## Important: This Issue May Affect Other Python Code
 
-**This is not a pydantic-specific bug.** The crash occurs in Python's WASI runtime during bytecode compilation, not in pydantic code. Any Python code with methods containing 28+ if/elif branches will trigger the same crash.
+**This is not a pydantic-specific bug.** The crash occurs in Python's zipimport module when loading sub-modules from zipfiles. Any Python library that:
+1. Is loaded from a zipfile
+2. Has sub-modules (not just `__init__.py`)
+3. Contains methods with 28+ if/elif branches in those sub-modules
+
+...will trigger the same crash.
 
 ### Implications
 
-1. **Other libraries may be affected** - Any Python library with methods containing 28+ if/elif branches will crash
-2. **The issue is in Python's WASI build** - Specifically in the bytecode compiler and memory allocator
-3. **Exact trigger identified** - Methods with 28+ if/elif branches crash; 27 branches works fine
+1. **Other libraries may be affected** - Any library loaded from zipfile with large if/elif chains in sub-modules
+2. **The issue is in Python's zipimport** - Specifically when loading sub-modules, not `__init__.py`
+3. **Code in `__init__.py` is safe** - Even with 100+ if/elif branches
 
 ### Workarounds for Other Libraries
 
 If you encounter similar crashes with other libraries:
 
-1. **Check for large if/elif chains** - Look for methods with 28+ if/elif branches
-2. **Refactor large switch statements** - Convert if/elif chains to dictionary dispatch:
-   ```python
-   # Instead of:
-   if x == 0: return "a"
-   elif x == 1: return "b"
-   # ...
-
-   # Use:
-   dispatch = {0: "a", 1: "b", ...}
-   return dispatch.get(x, "default")
-   ```
-3. **Pre-compile to .pyc** - Ship bytecode instead of source to avoid runtime compilation
-4. **Split methods** - Break large methods into smaller helper methods
+1. **Check for sub-module imports** - The crash only happens when importing from sub-modules
+2. **Move code to `__init__.py`** - Code directly in `__init__.py` doesn't crash
+3. **Pre-compile to .pyc** - Ship bytecode to avoid runtime compilation
+4. **Load from filesystem** - Extract modules instead of loading from zipfile
+5. **Refactor large if/elif chains** - Convert to dictionary dispatch
 
 ### Reporting
 
-This issue should be reported to:
-- The CPython WASI maintainers
-- The wasmtime team (as it may be related to their dlmalloc implementation)
+This issue should be reported to the **CPython WASI team** as a bug in the frozen zipimport module.
 
 ## Date
 
