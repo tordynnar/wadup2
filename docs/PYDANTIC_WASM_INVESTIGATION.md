@@ -166,7 +166,31 @@ validated = validator.validate_python({'name': 'Alice', 'age': 30})
 
 - The crash is in compiled C code (dlmalloc), not pydantic_core
 - WASM function 15532 is the memory allocator, not pydantic-specific code
-- The issue may affect other large Python files, not just pydantic
+
+## Important: This Issue May Affect Other Large Python Files
+
+**This is not a pydantic-specific bug.** The crash occurs in Python's WASI runtime during bytecode compilation, not in pydantic code. Any Python file that is sufficiently large or complex may trigger the same crash.
+
+### Implications
+
+1. **Other libraries may be affected** - Any Python library with large source files (2000+ lines) could crash during import
+2. **The issue is in Python's WASI build** - Specifically in the memory allocator (dlmalloc) used by the WASI runtime
+3. **File size appears to be the trigger** - The crash occurs somewhere between ~214 lines (works) and 2884 lines (crashes)
+
+### Workarounds for Other Libraries
+
+If you encounter similar crashes with other libraries:
+
+1. **Check file sizes** - Look for very large Python source files in the library
+2. **Try splitting files** - If you control the source, split large files into smaller modules
+3. **Pre-compile to .pyc** - Ship bytecode instead of source to avoid runtime compilation
+4. **Use simpler alternatives** - Look for lighter-weight libraries that don't have large source files
+
+### Reporting
+
+This issue should be reported to:
+- The CPython WASI maintainers
+- The wasmtime team (as it may be related to their dlmalloc implementation)
 
 ## Date
 
