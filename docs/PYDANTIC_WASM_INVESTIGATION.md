@@ -24,21 +24,43 @@ This document details the investigation into why the full `pydantic` library (sp
 | **Method with 27 if/elif branches** | ✅ Works |
 | **Method with 28 if/elif branches** | ❌ Crashes |
 
-### Minimal Reproduction (No Pydantic Required)
+### Minimal Reproduction with wasmtime CLI
 
-The crash can be reproduced with this 76-line file:
+The crash can be reproduced with wasmtime directly:
+
+```bash
+# Run the wadup-built module
+wasmtime run \
+  --dir=/tmp/wasm-app::/app \
+  --invoke process \
+  examples/python-large-file-test/target/python_large_file_test.wasm
+```
+
+The crash occurs when the module tries to import `large_module.py` which contains a method with 28 if/elif branches.
+
+### Key Finding: Crash is wadup-specific
+
+**Important:** The same Python code runs successfully with standalone Python WASM:
+
+```bash
+# This WORKS - same code, standalone Python
+wasmtime run \
+  --dir=. \
+  --dir=/tmp \
+  --env PYTHONPATH=/lib/python3.13 \
+  official/python-3.13.0-wasi_sdk-24/python.wasm -- /tmp/large_module.py
+```
+
+The crash only occurs in wadup-built modules, which include:
+- pydantic_core C extension
+- Custom zipimport-based module loading
+- C main.c entry point with process() function
+
+### Crashing Code Pattern
 
 ```python
-"""Minimal reproduction of WASI Python dlmalloc crash."""
-from __future__ import annotations
-from typing import Any
-
-
 class CrashTrigger:
-    """Class with a method that has 28 if/elif branches - triggers dlmalloc crash."""
-
     def method_with_many_branches(self, obj: Any) -> str:
-        """Method with 28 if/elif branches - crashes during bytecode compilation."""
         if obj == 0:
             return "case_0"
         elif obj == 1:
@@ -49,7 +71,7 @@ class CrashTrigger:
         return "default"
 ```
 
-**The crash occurs at exactly 28 if/elif branches.** 27 branches works fine.
+**The crash occurs at exactly 28 if/elif branches in wadup modules.** 27 branches works fine.
 
 ## What Works
 
@@ -169,11 +191,11 @@ Created minimal test case without pydantic:
 - Found: 27 branches works, 28 branches crashes
 - Confirmed with 76-line minimal reproduction file
 
-## Root Cause: Confirmed
+## Root Cause: wadup-specific Build Issue
 
-The crash is caused by a bug in Python's WASI build when compiling methods with many if/elif branches.
+The crash is specific to wadup-built Python WASM modules. **The same Python code works fine with standalone Python WASM.**
 
-**Specific trigger**: Methods with **28 or more if/elif branches** crash during bytecode compilation.
+**Specific trigger in wadup modules**: Methods with **28 or more if/elif branches** crash during bytecode compilation.
 
 The crash occurs in dlmalloc when:
 1. Python's compiler generates bytecode for a method with 28+ if/elif branches
@@ -181,10 +203,12 @@ The crash occurs in dlmalloc when:
 3. dlmalloc's freelist traversal encounters an invalid pointer
 4. The `i32.load` instruction at offset 0xa2c0f3 dereferences the invalid pointer
 
-The root cause appears to be a memory corruption bug in the CPython WASI build related to:
-- Bytecode generation for complex control flow (many branches)
-- Memory allocation patterns during compilation
-- Possible buffer overflow or off-by-one error in branch table generation
+The root cause appears to be related to how wadup builds Python WASM modules:
+- **pydantic_core C extension** - May interfere with memory allocation
+- **zipimport-based loading** - Modules are loaded from /app/modules.zip
+- **Custom entry point** - C main.c with process() function
+
+The standalone Python WASM (`official/python-3.13.0-wasi_sdk-24/python.wasm`) handles the same Python code without issues, confirming this is a wadup build issue, not a general Python WASI issue.
 
 ## Recommendations
 
