@@ -119,18 +119,19 @@ int process(void) {
         }
     }
 
-    // Build command to run entry module
-    // Call main() if it exists, otherwise just import the module
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd),
-        "import %s as _m; _m.main() if hasattr(_m, 'main') else None",
-        ENTRY_MODULE);
+    // Run entry module using compile-time string concatenation
+    // NOTE: Using snprintf here causes memory corruption when importing
+    // modules from zipfiles due to a bug in Python-WASI's frozen zipimport.
+    // The workaround is to use preprocessor string concatenation instead.
+    #define IMPORT_CMD "import " ENTRY_MODULE " as _m; _m.main() if hasattr(_m, 'main') else None"
 
     // Execute the entry module
-    if (PyRun_SimpleString(cmd) != 0) {
+    if (PyRun_SimpleString(IMPORT_CMD) != 0) {
         PyErr_Print();
         return 1;
     }
+
+    #undef IMPORT_CMD
 
     // NOTE: We do NOT call Py_FinalizeEx() here!
     // The interpreter stays alive across multiple process() calls,
