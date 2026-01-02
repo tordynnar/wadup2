@@ -22,7 +22,7 @@ else
 fi
 
 # Versions
-WASI_SDK_VERSION="29.0"
+WASI_SDK_VERSION="24.0"
 WASI_SDK_MAJOR="${WASI_SDK_VERSION%%.*}"  # Extract major version (29 from 29.0)
 ZLIB_VERSION="1.3.1"
 BZIP2_VERSION="1.0.8"

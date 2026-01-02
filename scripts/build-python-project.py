@@ -317,7 +317,7 @@ def main() -> int:
         print_error(f"Unsupported OS: {os_name}")
         return 1
 
-    wasi_sdk_version = "29.0"
+    wasi_sdk_version = "24.0"
     wasi_sdk_path = deps_dir / f"wasi-sdk-{wasi_sdk_version}-{arch}-{wasi_sdk_os}"
     wasi_sysroot = wasi_sdk_path / "share" / "wasi-sysroot"
 
@@ -374,6 +374,10 @@ def main() -> int:
         # Copy project source
         print_info("Bundling project source...")
         shutil.copytree(source_dir, bundle_dir / entry_module)
+
+        # Note: Python stdlib is provided via frozen modules in libpython
+        # (not bundled in zipfile) to avoid runtime bytecode compilation crashes.
+        # See docs/PYDANTIC_WASM_INVESTIGATION.md for details.
 
         # Bundle C extension Python files (lxml + pydantic always included)
         ext_python_dirs = get_all_python_dirs()
@@ -513,9 +517,9 @@ def main() -> int:
         ldflags = [
             "-Wl,--allow-undefined",
             "-Wl,--export=process",
-            "-Wl,--initial-memory=134217728",
-            "-Wl,--max-memory=268435456",
-            "-Wl,--no-entry"
+            "-Wl,--initial-memory=134217728",  # 128 MB
+            "-Wl,--max-memory=268435456",      # 256 MB
+            "-Wl,--no-entry",
         ]
         wasi_emu_libs = wasi_sysroot / "lib" / "wasm32-wasip1"
 

@@ -25,7 +25,7 @@ else
     exit 1
 fi
 
-WASI_SDK_VERSION="29.0"
+WASI_SDK_VERSION="24.0"
 WASI_SDK_PATH="$DEPS_DIR/wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-${WASI_SDK_OS}"
 
 echo "=== Building lxml ${LXML_VERSION} for WASI ==="

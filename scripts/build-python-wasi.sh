@@ -29,7 +29,7 @@ else
     exit 1
 fi
 
-WASI_SDK_VERSION="29.0"
+WASI_SDK_VERSION="24.0"
 WASI_SDK_NAME="wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-${WASI_SDK_OS}"
 WASI_SDK_PATH="$DEPS_DIR/$WASI_SDK_NAME"
 
@@ -75,6 +75,7 @@ patch -p1 < "$SCRIPT_DIR/patches/cpython-wasi-threading.patch"
 patch -p1 < "$SCRIPT_DIR/patches/cpython-wasi-gilstate.patch"
 
 # Enable frozen stdlib modules (required for WASI without filesystem)
+# Note: This increases the binary size but is necessary for standalone execution
 echo "Enabling frozen stdlib modules..."
 
 # Create a Python script to modify freeze_modules.py
@@ -277,6 +278,11 @@ fi
 # Copy headers
 cp -r ../../Include/* "${PYTHON_DIR}/include/"
 cp pyconfig.h "${PYTHON_DIR}/include/"
+
+# Note: We don't copy the Python stdlib to a separate directory
+# because we use frozen modules compiled into the binary.
+# This avoids the bytecode compilation crash issue at runtime.
+# See docs/PYDANTIC_WASM_INVESTIGATION.md for details.
 
 # Get back to original dir
 cd "$WADUP_ROOT"
