@@ -245,7 +245,7 @@ The processing engine containing:
 - **SharedBuffer**: Zero-copy memory abstraction using `bytes::Bytes` with memory-mapped file loading
 - **Content Store**: Zero-copy content management with SharedBuffer-based slicing
 - **WASM Runtime**: wasmtime integration with resource limits and virtual filesystem
-- **Metadata Store**: Elasticsearch client with document accumulation
+- **Metadata Store**: Elasticsearch client with flat document structure
 - **Processor**: Work-stealing parallel execution
 - **Host Bindings**: FFI exports for WASM modules (define_table, insert_row, emit_subcontent, etc.)
 
@@ -360,7 +360,11 @@ SubContent::emit_slice(
 
 ## Elasticsearch & Kibana
 
-WADUP stores metadata in Elasticsearch, with one JSON document per processed content item. Each document contains all module outputs, stdout/stderr, and processing metadata.
+WADUP stores metadata in Elasticsearch using a flat document structure. Each processing run produces multiple documents linked by `content_uuid`:
+
+- **Content documents**: One per processed file (metadata, status)
+- **Module output documents**: One per module (stdout/stderr)
+- **Row documents**: One per table row emitted by modules
 
 ### Starting the Services
 
@@ -378,53 +382,57 @@ docker-compose down
 docker-compose down -v
 ```
 
-### JSON Document Structure
+### Document Types
 
-Each content item produces one document:
+All documents share `content_uuid` and `processed_at` fields for joining and time filtering.
 
+**1. Content Document** (`doc_type: "content"`):
 ```json
 {
-  "uuid": "4757c08a-2ded-4637-b170-eae8f52fd3c4",
+  "doc_type": "content",
+  "content_uuid": "4757c08a-2ded-4637-b170-eae8f52fd3c4",
   "filename": "sample.db",
   "parent_uuid": null,
   "processed_at": "2024-01-03T12:00:00Z",
   "status": "success",
-  "error_message": null,
-  "modules": {
-    "sqlite_parser": {
-      "stdout": null,
-      "stderr": null,
-      "stdout_truncated": false,
-      "stderr_truncated": false,
-      "tables": {
-        "db_table_stats": [
-          ["users", "100"],
-          ["posts", "50"]
-        ]
-      }
-    },
-    "byte_counter": {
-      "stdout": null,
-      "stderr": null,
-      "stdout_truncated": false,
-      "stderr_truncated": false,
-      "tables": {
-        "file_sizes": [
-          ["16384"]
-        ]
-      }
-    }
-  }
+  "error_message": null
+}
+```
+
+**2. Module Output Document** (`doc_type: "module_output"`):
+```json
+{
+  "doc_type": "module_output",
+  "content_uuid": "4757c08a-2ded-4637-b170-eae8f52fd3c4",
+  "module_name": "sqlite_parser",
+  "processed_at": "2024-01-03T12:00:00Z",
+  "stdout": "Parsed 3 tables",
+  "stderr": null,
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}
+```
+
+**3. Row Document** (`doc_type: "row"`):
+```json
+{
+  "doc_type": "row",
+  "content_uuid": "4757c08a-2ded-4637-b170-eae8f52fd3c4",
+  "_module": "sqlite_parser",
+  "_table": "db_table_stats",
+  "processed_at": "2024-01-03T12:00:00Z",
+  "table_name": "users",
+  "row_count": "100"
 }
 ```
 
 Key fields:
-- **uuid**: Unique identifier for this content
-- **filename**: Original filename or extracted name
-- **parent_uuid**: Parent content UUID (null for top-level files)
-- **status**: `"success"` or `"failed"`
-- **modules**: Nested object with each module's output
-- **tables**: Module-defined tables as arrays of row values
+- **doc_type**: Document type (`"content"`, `"module_output"`, or `"row"`)
+- **content_uuid**: Links all documents from the same content
+- **processed_at**: Timestamp for time-based filtering in Kibana
+- **_module**: Module that emitted this row (underscore prefix avoids conflicts)
+- **_table**: Table name (underscore prefix avoids conflicts)
+- Column values are flattened as key-value pairs (e.g., `table_name`, `row_count`)
 
 ### Using Kibana
 
@@ -432,7 +440,8 @@ Key fields:
 2. Go to **Management > Stack Management > Data Views**
 3. Click **Create data view**
 4. Enter `wadup*` as the index pattern
-5. Click **Save data view to Kibana**
+5. Select `processed_at` as the **Timestamp field**
+6. Click **Save data view to Kibana**
 
 #### Discover (Search & Browse)
 
@@ -441,20 +450,26 @@ Key fields:
 3. Use the search bar for queries:
 
 ```
-# Find all successful content
-status: "success"
+# Find all content documents
+doc_type: "content"
+
+# Find successful content
+doc_type: "content" AND status: "success"
 
 # Find content by filename
 filename: "sample.db"
 
-# Find content with specific module
-modules.sqlite_parser.tables.db_table_stats: *
+# Find all row documents for a table
+doc_type: "row" AND _table: "db_table_stats"
+
+# Find rows from a specific module
+doc_type: "row" AND _module: "sqlite_parser"
 
 # Find failed content
-status: "failed"
+doc_type: "content" AND status: "failed"
 
 # Find sub-content (has parent)
-parent_uuid: *
+doc_type: "content" AND parent_uuid: *
 ```
 
 #### Dev Tools (Raw Queries)
@@ -462,47 +477,67 @@ parent_uuid: *
 Go to **Management > Dev Tools** for direct Elasticsearch queries:
 
 ```json
-# List all documents
+# List all content documents
 GET wadup/_search
 {
+  "query": { "term": { "doc_type": "content" } },
   "size": 100
 }
 
-# Find by filename
-GET wadup/_search
-{
-  "query": {
-    "match": { "filename": "sample.db" }
-  }
-}
-
-# Find all sub-content of a parent
-GET wadup/_search
-{
-  "query": {
-    "term": { "parent_uuid": "4757c08a-2ded-4637-b170-eae8f52fd3c4" }
-  }
-}
-
-# Count documents by status
-GET wadup/_search
-{
-  "size": 0,
-  "aggs": {
-    "by_status": {
-      "terms": { "field": "status.keyword" }
-    }
-  }
-}
-
-# Find content with errors
+# Find content by filename
 GET wadup/_search
 {
   "query": {
     "bool": {
       "must": [
-        { "term": { "status.keyword": "failed" } }
+        { "term": { "doc_type": "content" } },
+        { "match": { "filename": "sample.db" } }
       ]
+    }
+  }
+}
+
+# Find all rows for a table
+GET wadup/_search
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "term": { "doc_type": "row" } },
+        { "term": { "_table": "db_table_stats" } }
+      ]
+    }
+  }
+}
+
+# Find all documents for a specific content
+GET wadup/_search
+{
+  "query": {
+    "term": { "content_uuid": "4757c08a-2ded-4637-b170-eae8f52fd3c4" }
+  }
+}
+
+# Count rows by table
+GET wadup/_search
+{
+  "query": { "term": { "doc_type": "row" } },
+  "size": 0,
+  "aggs": {
+    "by_table": {
+      "terms": { "field": "_table.keyword" }
+    }
+  }
+}
+
+# Count content by status
+GET wadup/_search
+{
+  "query": { "term": { "doc_type": "content" } },
+  "size": 0,
+  "aggs": {
+    "by_status": {
+      "terms": { "field": "status.keyword" }
     }
   }
 }
@@ -516,17 +551,35 @@ Query directly with curl:
 # Count all documents
 curl -s "http://localhost:9200/wadup/_count" | jq
 
-# Search all documents
-curl -s "http://localhost:9200/wadup/_search?pretty&size=10"
+# Count content documents only
+curl -s "http://localhost:9200/wadup/_count" -H "Content-Type: application/json" -d '
+{"query": {"term": {"doc_type": "content"}}}'
 
-# Find by filename
+# Find all rows for a table
 curl -s "http://localhost:9200/wadup/_search?pretty" -H "Content-Type: application/json" -d '
 {
-  "query": { "match": { "filename": "sample.db" } }
+  "query": {
+    "bool": {
+      "must": [
+        { "term": { "doc_type": "row" } },
+        { "term": { "_table": "db_table_stats" } }
+      ]
+    }
+  }
 }'
 
-# Get a specific document by UUID
-curl -s "http://localhost:9200/wadup/_doc/4757c08a-2ded-4637-b170-eae8f52fd3c4?pretty"
+# Find content by filename
+curl -s "http://localhost:9200/wadup/_search?pretty" -H "Content-Type: application/json" -d '
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "term": { "doc_type": "content" } },
+        { "match": { "filename": "sample.db" } }
+      ]
+    }
+  }
+}'
 ```
 
 ### Data Types

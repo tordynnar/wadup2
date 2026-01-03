@@ -228,21 +228,21 @@ run_wadup() {
         2>&1
 }
 
-# Assert table exists in at least one document
+# Assert table exists (at least one row document with this table_name)
 assert_table_exists() {
     local table="$1"
 
     refresh_es_index
 
-    # Search for documents that have this table in any module
+    # Query for row documents with matching table_name
     local count=$(curl -s "$ES_URL/$ES_INDEX/_search" -H "Content-Type: application/json" -d "
 {
   \"query\": {
     \"bool\": {
-      \"should\": [
-        { \"exists\": { \"field\": \"modules.*.tables.$table\" } }
-      ],
-      \"minimum_should_match\": 1
+      \"must\": [
+        { \"term\": { \"doc_type\": \"row\" } },
+        { \"term\": { \"_table\": \"$table\" } }
+      ]
     }
   },
   \"size\": 0
@@ -252,32 +252,13 @@ data = json.load(sys.stdin)
 print(data.get('hits', {}).get('total', {}).get('value', 0))
 ")
 
-    # If the exists query didn't work, try a different approach
-    if [[ "$count" -eq 0 ]]; then
-        # Search all documents and check manually
-        count=$(curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-table_name = '$table'
-count = 0
-for hit in data.get('hits', {}).get('hits', []):
-    source = hit.get('_source', {})
-    modules = source.get('modules', {})
-    for module_name, module_data in modules.items():
-        if table_name in module_data.get('tables', {}):
-            count += 1
-            break
-print(count)
-")
-    fi
-
     if [[ "$count" -eq 0 ]]; then
         print_error "Table '$table' not found in any document"
         return 1
     fi
 }
 
-# Assert total row count across all documents
+# Assert total row count for a table
 assert_row_count() {
     local table="$1"
     local expected="$2"
@@ -285,20 +266,22 @@ assert_row_count() {
 
     refresh_es_index
 
-    # Count rows in the table across all documents
-    local count=$(curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
+    # Count row documents with matching table_name
+    local count=$(curl -s "$ES_URL/$ES_INDEX/_search" -H "Content-Type: application/json" -d "
+{
+  \"query\": {
+    \"bool\": {
+      \"must\": [
+        { \"term\": { \"doc_type\": \"row\" } },
+        { \"term\": { \"_table\": \"$table\" } }
+      ]
+    }
+  },
+  \"size\": 0
+}" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-table_name = '$table'
-total_rows = 0
-for hit in data.get('hits', {}).get('hits', []):
-    source = hit.get('_source', {})
-    modules = source.get('modules', {})
-    for module_name, module_data in modules.items():
-        tables = module_data.get('tables', {})
-        if table_name in tables:
-            total_rows += len(tables[table_name])
-print(total_rows)
+print(data.get('hits', {}).get('total', {}).get('value', 0))
 ")
 
     case "$op" in
@@ -311,31 +294,37 @@ print(total_rows)
 }
 
 # Assert specific value in a table
-# Usage: assert_value "table" "column_index" "expected_value" ["row_filter_python_expr"]
+# Usage: assert_value "table" "column_name" "expected_value" ["row_filter_python_expr"]
 assert_value() {
     local table="$1"
-    local column_index="$2"
+    local column_name="$2"
     local expected="$3"
-    local filter="${4:-True}"  # Optional row filter
+    local filter="${4:-True}"  # Optional row filter (operates on 'row' which is the document _source)
 
     refresh_es_index
 
-    local actual=$(curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
+    # Query row documents with matching table_name
+    local actual=$(curl -s "$ES_URL/$ES_INDEX/_search" -H "Content-Type: application/json" -d "
+{
+  \"query\": {
+    \"bool\": {
+      \"must\": [
+        { \"term\": { \"doc_type\": \"row\" } },
+        { \"term\": { \"_table\": \"$table\" } }
+      ]
+    }
+  },
+  \"size\": 1000
+}" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-table_name = '$table'
-col_idx = $column_index
+col_name = '$column_name'
 for hit in data.get('hits', {}).get('hits', []):
-    source = hit.get('_source', {})
-    modules = source.get('modules', {})
-    for module_name, module_data in modules.items():
-        tables = module_data.get('tables', {})
-        if table_name in tables:
-            for row in tables[table_name]:
-                if $filter:
-                    if col_idx < len(row):
-                        print(row[col_idx])
-                        sys.exit(0)
+    row = hit.get('_source', {})
+    if $filter:
+        if col_name in row:
+            print(row[col_name])
+            sys.exit(0)
 ")
 
     if [[ "$actual" != "$expected" ]]; then
@@ -435,18 +424,25 @@ test_python_module_reuse() {
 
     # Verify counter increments (module reuse)
     refresh_es_index
-    local values=$(curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
+    local values=$(curl -s "$ES_URL/$ES_INDEX/_search" -H "Content-Type: application/json" -d "
+{
+  \"query\": {
+    \"bool\": {
+      \"must\": [
+        { \"term\": { \"doc_type\": \"row\" } },
+        { \"term\": { \"_table\": \"call_counter\" } }
+      ]
+    }
+  },
+  \"size\": 1000
+}" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 values = []
 for hit in data.get('hits', {}).get('hits', []):
-    source = hit.get('_source', {})
-    modules = source.get('modules', {})
-    for module_name, module_data in modules.items():
-        tables = module_data.get('tables', {})
-        if 'call_counter' in tables:
-            for row in tables['call_counter']:
-                values.append(row[0])
+    row = hit.get('_source', {})
+    if 'call_number' in row:
+        values.append(row['call_number'])
 values.sort()
 print('\\n'.join(str(v) for v in values))
 ")
@@ -549,19 +545,25 @@ test_python_pydantic() {
 
     # Verify status is success
     refresh_es_index
-    local status=$(curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
+    local status=$(curl -s "$ES_URL/$ES_INDEX/_search" -H "Content-Type: application/json" -d "
+{
+  \"query\": {
+    \"bool\": {
+      \"must\": [
+        { \"term\": { \"doc_type\": \"row\" } },
+        { \"term\": { \"_table\": \"info\" } }
+      ]
+    }
+  },
+  \"size\": 1000
+}" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 for hit in data.get('hits', {}).get('hits', []):
-    source = hit.get('_source', {})
-    modules = source.get('modules', {})
-    for module_name, module_data in modules.items():
-        tables = module_data.get('tables', {})
-        if 'info' in tables:
-            for row in tables['info']:
-                if len(row) >= 2 and row[0] == 'status':
-                    print(row[1])
-                    sys.exit(0)
+    row = hit.get('_source', {})
+    if row.get('key') == 'status':
+        print(row.get('value', ''))
+        sys.exit(0)
 ")
     if [[ "$status" != "success" ]]; then
         print_error "Expected status 'success', got '$status'"
@@ -569,19 +571,25 @@ for hit in data.get('hits', {}).get('hits', []):
     fi
 
     # Verify pydantic_core version (we use pydantic_core directly, not high-level pydantic)
-    local pydantic_core_version=$(curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
+    local pydantic_core_version=$(curl -s "$ES_URL/$ES_INDEX/_search" -H "Content-Type: application/json" -d "
+{
+  \"query\": {
+    \"bool\": {
+      \"must\": [
+        { \"term\": { \"doc_type\": \"row\" } },
+        { \"term\": { \"_table\": \"info\" } }
+      ]
+    }
+  },
+  \"size\": 1000
+}" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 for hit in data.get('hits', {}).get('hits', []):
-    source = hit.get('_source', {})
-    modules = source.get('modules', {})
-    for module_name, module_data in modules.items():
-        tables = module_data.get('tables', {})
-        if 'info' in tables:
-            for row in tables['info']:
-                if len(row) >= 2 and row[0] == 'pydantic_core_version':
-                    print(row[1])
-                    sys.exit(0)
+    row = hit.get('_source', {})
+    if row.get('key') == 'pydantic_core_version':
+        print(row.get('value', ''))
+        sys.exit(0)
 ")
     if [[ -z "$pydantic_core_version" ]]; then
         print_error "pydantic_core version not found"

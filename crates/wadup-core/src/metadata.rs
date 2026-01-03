@@ -1,64 +1,55 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use anyhow::Result;
-use serde::{Serialize, Deserialize};
+use serde::Serialize;
 use chrono::{DateTime, Utc};
 use crate::bindings_types::{TableSchema, Value};
 
-/// Output from a single module processing a piece of content
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModuleOutput {
-    pub stdout: Option<String>,
-    pub stderr: Option<String>,
-    pub stdout_truncated: bool,
-    pub stderr_truncated: bool,
-    /// Tables emitted by this module, keyed by table name
-    /// Each table contains rows, where each row is a list of values
-    pub tables: HashMap<String, Vec<Vec<serde_json::Value>>>,
-}
-
-impl Default for ModuleOutput {
-    fn default() -> Self {
-        Self {
-            stdout: None,
-            stderr: None,
-            stdout_truncated: false,
-            stderr_truncated: false,
-            tables: HashMap::new(),
-        }
-    }
-}
-
-/// Document representing a single piece of content and all its processing results
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContentDocument {
-    pub uuid: String,
+/// Content metadata document
+#[derive(Debug, Clone, Serialize)]
+pub struct ContentDoc {
+    pub doc_type: &'static str,
+    pub content_uuid: String,
     pub filename: String,
     pub parent_uuid: Option<String>,
     pub processed_at: DateTime<Utc>,
     pub status: String,
     pub error_message: Option<String>,
-    /// Module outputs keyed by module name
-    pub modules: HashMap<String, ModuleOutput>,
 }
 
-impl ContentDocument {
-    fn new(uuid: String, filename: String, parent_uuid: Option<String>) -> Self {
-        Self {
-            uuid,
-            filename,
-            parent_uuid,
-            processed_at: Utc::now(),
-            status: "processing".to_string(),
-            error_message: None,
-            modules: HashMap::new(),
-        }
-    }
+/// Module stdout/stderr output document
+#[derive(Debug, Clone, Serialize)]
+pub struct ModuleOutputDoc {
+    pub doc_type: &'static str,
+    pub content_uuid: String,
+    pub module_name: String,
+    pub processed_at: DateTime<Utc>,
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
 }
 
-/// Internal state for accumulating document data
-struct DocumentState {
-    document: ContentDocument,
+/// Table row document with flattened column values
+/// Fixed fields use underscore prefix to avoid conflicts with column names
+#[derive(Debug, Clone, Serialize)]
+pub struct RowDoc {
+    pub doc_type: &'static str,
+    pub content_uuid: String,
+    #[serde(rename = "_module")]
+    pub module_name: String,
+    #[serde(rename = "_table")]
+    pub table_name: String,
+    pub processed_at: DateTime<Utc>,
+    /// Column values flattened as key-value pairs
+    #[serde(flatten)]
+    pub columns: HashMap<String, String>,
+}
+
+/// Tracking state for content being processed
+struct ContentState {
+    filename: String,
+    parent_uuid: Option<String>,
     current_module: Option<String>,
 }
 
@@ -66,8 +57,10 @@ pub struct MetadataStore {
     es_url: String,
     es_index: String,
     client: reqwest::blocking::Client,
-    /// Documents being accumulated, keyed by content UUID
-    documents: Arc<Mutex<HashMap<String, DocumentState>>>,
+    /// Content state tracking, keyed by content UUID
+    content_state: Arc<Mutex<HashMap<String, ContentState>>>,
+    /// Table schemas, keyed by table name -> column names
+    table_schemas: Arc<Mutex<HashMap<String, Vec<String>>>>,
 }
 
 impl MetadataStore {
@@ -100,87 +93,91 @@ impl MetadataStore {
             es_url: es_url.to_string(),
             es_index: es_index.to_string(),
             client,
-            documents: Arc::new(Mutex::new(HashMap::new())),
+            content_state: Arc::new(Mutex::new(HashMap::new())),
+            table_schemas: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
-    /// Start accumulating data for a new content item
+    /// Start tracking a new content item
     pub fn start_content(
         &self,
         uuid: &str,
         filename: &str,
         parent_uuid: Option<&str>,
     ) -> Result<()> {
-        let mut documents = self.documents.lock().unwrap();
-        let state = DocumentState {
-            document: ContentDocument::new(
-                uuid.to_string(),
-                filename.to_string(),
-                parent_uuid.map(|s| s.to_string()),
-            ),
+        let mut state = self.content_state.lock().unwrap();
+        state.insert(uuid.to_string(), ContentState {
+            filename: filename.to_string(),
+            parent_uuid: parent_uuid.map(|s| s.to_string()),
             current_module: None,
-        };
-        documents.insert(uuid.to_string(), state);
+        });
         Ok(())
     }
 
-    /// Set the current module context for subsequent insert_row calls
+    /// Set the current module context for subsequent operations
     pub fn set_current_module(&self, uuid: &str, module_name: &str) -> Result<()> {
-        let mut documents = self.documents.lock().unwrap();
-        if let Some(state) = documents.get_mut(uuid) {
-            state.current_module = Some(module_name.to_string());
-            // Ensure module output exists
-            if !state.document.modules.contains_key(module_name) {
-                state.document.modules.insert(
-                    module_name.to_string(),
-                    ModuleOutput::default(),
-                );
+        let mut state = self.content_state.lock().unwrap();
+        if let Some(content) = state.get_mut(uuid) {
+            content.current_module = Some(module_name.to_string());
+        }
+        Ok(())
+    }
+
+    /// Define a table schema - stores column names for flattening row values
+    pub fn define_table(&self, schema: TableSchema) -> Result<()> {
+        let column_names: Vec<String> = schema.columns.iter()
+            .map(|c| c.name.clone())
+            .collect();
+        let mut schemas = self.table_schemas.lock().unwrap();
+        schemas.insert(schema.name, column_names);
+        Ok(())
+    }
+
+    /// Insert a row - POSTs a RowDoc immediately with flattened column values
+    pub fn insert_row(&self, table: &str, uuid: &str, values: &[Value]) -> Result<()> {
+        let module_name = {
+            let state = self.content_state.lock().unwrap();
+            state.get(uuid)
+                .and_then(|s| s.current_module.clone())
+                .ok_or_else(|| anyhow::anyhow!("No current module set for content {}", uuid))?
+        };
+
+        // Get column names from schema
+        let column_names = {
+            let schemas = self.table_schemas.lock().unwrap();
+            schemas.get(table).cloned()
+                .ok_or_else(|| anyhow::anyhow!("No schema defined for table {}", table))?
+        };
+
+        // Build flattened column map
+        let mut columns = HashMap::new();
+        for (i, value) in values.iter().enumerate() {
+            if let Some(col_name) = column_names.get(i) {
+                let string_value = match value {
+                    Value::Int64(i) => i.to_string(),
+                    Value::Float64(f) => f.to_string(),
+                    Value::String(s) => s.clone(),
+                };
+                columns.insert(col_name.clone(), string_value);
             }
         }
-        Ok(())
-    }
 
-    /// Define a table schema (no-op for Elasticsearch - schema-less)
-    pub fn define_table(&self, _schema: TableSchema) -> Result<()> {
-        // Elasticsearch is schema-less, no action needed
-        Ok(())
-    }
+        let doc = RowDoc {
+            doc_type: "row",
+            content_uuid: uuid.to_string(),
+            module_name,
+            table_name: table.to_string(),
+            processed_at: Utc::now(),
+            columns,
+        };
 
-    /// Insert a row into a table for the current content/module
-    pub fn insert_row(&self, table: &str, uuid: &str, values: &[Value]) -> Result<()> {
-        let mut documents = self.documents.lock().unwrap();
-
-        if let Some(state) = documents.get_mut(uuid) {
-            let module_name = state.current_module.clone()
-                .ok_or_else(|| anyhow::anyhow!("No current module set for content {}", uuid))?;
-
-            // Convert values to JSON - always use strings to avoid ES mapping conflicts
-            let json_values: Vec<serde_json::Value> = values
-                .iter()
-                .map(|v| match v {
-                    Value::Int64(i) => serde_json::Value::String(i.to_string()),
-                    Value::Float64(f) => serde_json::Value::String(f.to_string()),
-                    Value::String(s) => serde_json::Value::String(s.clone()),
-                })
-                .collect();
-
-            // Get or create module output
-            let module_output = state.document.modules
-                .entry(module_name)
-                .or_insert_with(ModuleOutput::default);
-
-            // Get or create table
-            let table_rows = module_output.tables
-                .entry(table.to_string())
-                .or_insert_with(Vec::new);
-
-            table_rows.push(json_values);
-        }
+        // POST without explicit ID - let ES generate one
+        self.post_document_auto_id(&doc)?;
 
         Ok(())
     }
 
-    /// Record module stdout/stderr output
+    /// Record module stdout/stderr - POSTs a ModuleOutputDoc immediately
     pub fn record_module_output(
         &self,
         content_uuid: &str,
@@ -195,90 +192,114 @@ impl MetadataStore {
             return Ok(());
         }
 
-        let mut documents = self.documents.lock().unwrap();
+        let doc = ModuleOutputDoc {
+            doc_type: "module_output",
+            content_uuid: content_uuid.to_string(),
+            module_name: module_name.to_string(),
+            processed_at: Utc::now(),
+            stdout: stdout.map(|s| s.to_string()),
+            stderr: stderr.map(|s| s.to_string()),
+            stdout_truncated,
+            stderr_truncated,
+        };
 
-        if let Some(state) = documents.get_mut(content_uuid) {
-            let module_output = state.document.modules
-                .entry(module_name.to_string())
-                .or_insert_with(ModuleOutput::default);
-
-            module_output.stdout = stdout.map(|s| s.to_string());
-            module_output.stderr = stderr.map(|s| s.to_string());
-            module_output.stdout_truncated = stdout_truncated;
-            module_output.stderr_truncated = stderr_truncated;
-        }
+        // Use content_uuid + module_name as ID
+        let doc_id = format!("{}_{}", content_uuid, module_name);
+        self.post_document_with_id(&doc, &doc_id)?;
 
         Ok(())
     }
 
-    /// Finalize and POST a successful content document to Elasticsearch
+    /// Finalize a successful content - POSTs the ContentDoc
     pub fn finalize_content_success(&self, uuid: &str) -> Result<()> {
-        let document = {
-            let mut documents = self.documents.lock().unwrap();
-            if let Some(mut state) = documents.remove(uuid) {
-                state.document.status = "success".to_string();
-                state.document.processed_at = Utc::now();
-                Some(state.document)
+        let (filename, parent_uuid) = {
+            let mut state = self.content_state.lock().unwrap();
+            if let Some(content) = state.remove(uuid) {
+                (content.filename, content.parent_uuid)
             } else {
-                None
+                return Ok(());
             }
         };
 
-        if let Some(doc) = document {
-            self.post_document(&doc)?;
-        }
+        let doc = ContentDoc {
+            doc_type: "content",
+            content_uuid: uuid.to_string(),
+            filename,
+            parent_uuid,
+            processed_at: Utc::now(),
+            status: "success".to_string(),
+            error_message: None,
+        };
 
+        self.post_document_with_id(&doc, uuid)?;
         Ok(())
     }
 
-    /// Finalize and POST a failed content document to Elasticsearch
+    /// Finalize a failed content - POSTs the ContentDoc with error
     pub fn finalize_content_failure(&self, uuid: &str, error: &str) -> Result<()> {
-        let document = {
-            let mut documents = self.documents.lock().unwrap();
-            if let Some(mut state) = documents.remove(uuid) {
-                state.document.status = "failed".to_string();
-                state.document.error_message = Some(error.to_string());
-                state.document.processed_at = Utc::now();
-                Some(state.document)
+        let (filename, parent_uuid) = {
+            let mut state = self.content_state.lock().unwrap();
+            if let Some(content) = state.remove(uuid) {
+                (content.filename, content.parent_uuid)
             } else {
-                None
+                // Content not started, create minimal doc
+                ("unknown".to_string(), None)
             }
         };
 
-        if let Some(doc) = document {
-            self.post_document(&doc)?;
-        }
+        let doc = ContentDoc {
+            doc_type: "content",
+            content_uuid: uuid.to_string(),
+            filename,
+            parent_uuid,
+            processed_at: Utc::now(),
+            status: "failed".to_string(),
+            error_message: Some(error.to_string()),
+        };
 
+        self.post_document_with_id(&doc, uuid)?;
         Ok(())
     }
 
-    /// POST a document to Elasticsearch
-    fn post_document(&self, document: &ContentDocument) -> Result<()> {
-        let url = format!("{}/{}/_doc/{}", self.es_url, self.es_index, document.uuid);
+    /// POST a document with auto-generated ID
+    fn post_document_auto_id<T: Serialize>(&self, doc: &T) -> Result<()> {
+        let url = format!("{}/{}/_doc", self.es_url, self.es_index);
 
         let response = self.client
-            .put(&url)
+            .post(&url)
             .header("Content-Type", "application/json")
-            .json(document)
+            .json(doc)
             .send()?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().unwrap_or_default();
-            anyhow::bail!(
-                "Failed to index document {}: HTTP {} - {}",
-                document.uuid,
-                status,
-                body
-            );
+            anyhow::bail!("Failed to index document: HTTP {} - {}", status, body);
         }
 
-        tracing::debug!("Indexed document {} to Elasticsearch", document.uuid);
         Ok(())
     }
 
-    /// Legacy methods for backward compatibility during refactoring
-    /// These will be removed once processor.rs is updated
+    /// POST a document with explicit ID
+    fn post_document_with_id<T: Serialize>(&self, doc: &T, id: &str) -> Result<()> {
+        let url = format!("{}/{}/_doc/{}", self.es_url, self.es_index, id);
+
+        let response = self.client
+            .put(&url)
+            .header("Content-Type", "application/json")
+            .json(doc)
+            .send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to index document {}: HTTP {} - {}", id, status, body);
+        }
+
+        Ok(())
+    }
+
+    // Legacy compatibility methods
 
     pub fn record_content_success(
         &self,
@@ -286,13 +307,10 @@ impl MetadataStore {
         filename: &str,
         parent_uuid: Option<&str>,
     ) -> Result<()> {
-        // Start content if not already started
-        {
-            let documents = self.documents.lock().unwrap();
-            if !documents.contains_key(uuid) {
-                drop(documents);
-                self.start_content(uuid, filename, parent_uuid)?;
-            }
+        let state = self.content_state.lock().unwrap();
+        if !state.contains_key(uuid) {
+            drop(state);
+            self.start_content(uuid, filename, parent_uuid)?;
         }
         Ok(())
     }
@@ -304,15 +322,13 @@ impl MetadataStore {
         parent_uuid: Option<&str>,
         error: &str,
     ) -> Result<()> {
-        // Start content if not already started
         {
-            let documents = self.documents.lock().unwrap();
-            if !documents.contains_key(uuid) {
-                drop(documents);
+            let state = self.content_state.lock().unwrap();
+            if !state.contains_key(uuid) {
+                drop(state);
                 self.start_content(uuid, filename, parent_uuid)?;
             }
         }
-
         self.finalize_content_failure(uuid, error)
     }
 }
@@ -323,7 +339,8 @@ impl Clone for MetadataStore {
             es_url: self.es_url.clone(),
             es_index: self.es_index.clone(),
             client: self.client.clone(),
-            documents: Arc::clone(&self.documents),
+            content_state: Arc::clone(&self.content_state),
+            table_schemas: Arc::clone(&self.table_schemas),
         }
     }
 }
