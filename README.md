@@ -23,7 +23,10 @@ A high-performance parallel processing framework that executes sandboxed WebAsse
 git clone https://github.com/tordynnar/wadup2.git
 cd wadup2
 
-# Build the project
+# Build everything (downloads dependencies, builds Python WASI, examples)
+./scripts/build-all.sh
+
+# Or just build the CLI
 cargo build --release
 
 # The binary will be at target/release/wadup
@@ -479,22 +482,18 @@ All examples use the WASI target (`wasm32-wasip1`) to access the virtual filesys
 
 ### Building Examples
 
-**Rust Examples** (byte-counter, zip-extractor):
+The easiest way to build all examples is:
+```bash
+./scripts/build-examples.sh
+```
+
+This builds all Rust, Python, and Go examples automatically.
+
+**Individual Rust Examples** (byte-counter, zip-extractor, sqlite-parser):
 ```bash
 cd examples/byte-counter
 cargo build --target wasm32-wasip1 --release
 ```
-
-**SQLite Parser** (Rust with C dependencies):
-```bash
-cd examples/sqlite-parser
-./build.sh
-```
-
-The build script will automatically:
-- Detect your platform
-- Download WASI SDK if not present
-- Build the module for wasm32-wasip1 target
 
 See [examples/sqlite-parser/README.md](examples/sqlite-parser/README.md) for detailed documentation.
 
@@ -536,12 +535,6 @@ Then build individual Python modules using `build-python-project.py`:
 ./scripts/build-python-project.py examples/python-multi-file
 ```
 
-Or use Make:
-```bash
-cd examples/python-counter
-make
-```
-
 The build script:
 1. Parses `pyproject.toml` for dependencies and entry point
 2. Downloads pure-Python dependencies via `pip download --no-binary :all:`
@@ -571,7 +564,7 @@ For detailed build information and limitations:
 - [NumPy WASI Build Guide](NUMPY_WASI.md)
 - [Pandas WASI Build Guide](PANDAS_WASI.md)
 
-The shared Python WASI build (`build/python-wasi/`) includes:
+The shared Python WASI build (`deps/wasi-python/`) includes:
 - CPython 3.13.7 compiled for wasm32-wasip1
 - SQLite 3.45.1 for WASI
 - Frozen Python standard library (including logging, importlib, gettext, etc.)
@@ -585,7 +578,7 @@ See [examples/python-sqlite-parser/README.md](examples/python-sqlite-parser/READ
 
 ```bash
 cd examples/go-sqlite-parser
-make
+GOOS=wasip1 GOARCH=wasm go build -o target/go_sqlite_parser.wasm .
 ```
 
 Go modules use standard Go (not TinyGo) with `GOOS=wasip1 GOARCH=wasm` target. No special setup required - standard Go has built-in WASI support!
@@ -624,13 +617,8 @@ cargo build --target wasm32-wasip1 --release
 cd ../zip-extractor
 cargo build --target wasm32-wasip1 --release
 
-# For sqlite-parser, use the build script
-cd ../sqlite-parser
-./build.sh
-
-# For Go modules
-cd ../go-sqlite-parser
-make
+# Or build all examples at once
+./scripts/build-examples.sh
 ```
 
 ### Testing
