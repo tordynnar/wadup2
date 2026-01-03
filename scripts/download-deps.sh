@@ -1,6 +1,9 @@
 #!/bin/bash
 # Download and build external dependencies for WADUP
 # All dependencies are stored in the 'deps' folder
+#
+# This script only downloads dependencies - no building is done here.
+# Run ./scripts/build-all.sh to build after downloading.
 
 set -e
 
@@ -23,7 +26,7 @@ fi
 
 # Versions
 WASI_SDK_VERSION="24.0"
-WASI_SDK_MAJOR="${WASI_SDK_VERSION%%.*}"  # Extract major version (29 from 29.0)
+WASI_SDK_MAJOR="${WASI_SDK_VERSION%%.*}"
 ZLIB_VERSION="1.3.1"
 BZIP2_VERSION="1.0.8"
 XZ_VERSION="5.8.2"
@@ -31,8 +34,15 @@ SQLITE_VERSION="3510100"
 SQLITE_YEAR="2025"
 LIBXML2_VERSION="2.13.5"
 LIBXSLT_VERSION="1.1.42"
+LXML_VERSION="6.0.2"
+PYTHON_VERSION="3.13.7"
+PYDANTIC_CORE_VERSION="2.41.5"
+PYDANTIC_VERSION="2.12.5"
+TYPING_EXTENSIONS_VERSION="4.15.0"
+ANNOTATED_TYPES_VERSION="0.7.0"
+TYPING_INSPECTION_VERSION="0.4.2"
 
-# Create deps directory
+# Create deps directory if it doesn't exist
 mkdir -p "$DEPS_DIR"
 
 # Helper function to download files
@@ -60,7 +70,9 @@ echo "=== WADUP Dependency Downloader ==="
 echo "Dependencies will be stored in: $DEPS_DIR"
 echo ""
 
-# Download WASI SDK
+# =============================================================================
+# Section 1: WASI SDK
+# =============================================================================
 WASI_SDK_NAME="wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-${WASI_SDK_OS}"
 WASI_SDK_PATH="$DEPS_DIR/$WASI_SDK_NAME"
 
@@ -74,7 +86,9 @@ else
     echo "  Installed: $WASI_SDK_NAME"
 fi
 
-# Build zlib for WASI
+# =============================================================================
+# Section 2: C Libraries (downloaded and built)
+# =============================================================================
 echo ""
 echo "2. zlib ${ZLIB_VERSION}"
 if [ -f "$DEPS_DIR/wasi-zlib/lib/libz.a" ]; then
@@ -120,7 +134,6 @@ else
     echo "  Built successfully"
 fi
 
-# Build bzip2 for WASI
 echo ""
 echo "3. bzip2 ${BZIP2_VERSION}"
 if [ -f "$DEPS_DIR/wasi-bzip2/lib/libbz2.a" ]; then
@@ -157,7 +170,6 @@ else
     echo "  Built successfully"
 fi
 
-# Build liblzma (xz-utils) for WASI
 echo ""
 echo "4. liblzma (xz-utils) ${XZ_VERSION}"
 if [ -f "$DEPS_DIR/wasi-xz/lib/liblzma.a" ]; then
@@ -196,7 +208,6 @@ else
     echo "  Built successfully"
 fi
 
-# Build SQLite for WASI
 echo ""
 echo "5. SQLite ${SQLITE_VERSION}"
 if [ -f "$DEPS_DIR/wasi-sqlite/lib/libsqlite3.a" ]; then
@@ -231,9 +242,8 @@ else
     echo "  Built successfully"
 fi
 
-# Build libxml2 for WASI (optional - for lxml support)
 echo ""
-echo "6. libxml2 ${LIBXML2_VERSION} (optional - for lxml)"
+echo "6. libxml2 ${LIBXML2_VERSION}"
 if [ -f "$DEPS_DIR/wasi-libxml2/lib/libxml2.a" ]; then
     echo "  Already built"
 else
@@ -246,7 +256,6 @@ else
     cd "libxml2-${LIBXML2_VERSION}"
 
     # Patch xmlIO.c to work around missing dup() in WASI
-    # The dup() call is used for stdout output which we don't need
     python3 -c '
 import sys
 with open("xmlIO.c", "r") as f:
@@ -277,7 +286,6 @@ if old_code in content:
     print("  Patched xmlIO.c for WASI compatibility")
 '
 
-    # Configure for WASI - disable most optional features
     CC="$WASI_SDK_PATH/bin/clang" \
     AR="$WASI_SDK_PATH/bin/ar" \
     RANLIB="$WASI_SDK_PATH/bin/ranlib" \
@@ -311,9 +319,8 @@ if old_code in content:
     echo "  Built successfully"
 fi
 
-# Build libxslt for WASI (optional - for lxml support)
 echo ""
-echo "7. libxslt ${LIBXSLT_VERSION} (optional - for lxml)"
+echo "7. libxslt ${LIBXSLT_VERSION}"
 if [ -f "$DEPS_DIR/wasi-libxslt/lib/libxslt.a" ]; then
     echo "  Already built"
 else
@@ -325,7 +332,6 @@ else
     tar xJf "libxslt-${LIBXSLT_VERSION}.tar.xz"
     cd "libxslt-${LIBXSLT_VERSION}"
 
-    # Configure for WASI - disable most optional features
     CC="$WASI_SDK_PATH/bin/clang" \
     AR="$WASI_SDK_PATH/bin/ar" \
     RANLIB="$WASI_SDK_PATH/bin/ranlib" \
@@ -351,13 +357,95 @@ else
     echo "  Built successfully"
 fi
 
+# =============================================================================
+# Section 3: Python Source Downloads (download only, built by build-python-wasi.sh)
+# =============================================================================
+echo ""
+echo "8. CPython ${PYTHON_VERSION} source"
+PYTHON_TARBALL="$DEPS_DIR/Python-${PYTHON_VERSION}.tar.xz"
+if [ -f "$PYTHON_TARBALL" ]; then
+    echo "  Already downloaded"
+else
+    download "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tar.xz" "$PYTHON_TARBALL"
+fi
+
+echo ""
+echo "9. lxml ${LXML_VERSION} source"
+LXML_ARCHIVE="$DEPS_DIR/lxml-${LXML_VERSION}.tar.gz"
+if [ -f "$LXML_ARCHIVE" ]; then
+    echo "  Already downloaded"
+else
+    download "https://files.pythonhosted.org/packages/source/l/lxml/lxml-${LXML_VERSION}.tar.gz" "$LXML_ARCHIVE"
+fi
+
+# =============================================================================
+# Section 4: Pydantic and Python Package Downloads
+# =============================================================================
+echo ""
+echo "10. pydantic_core ${PYDANTIC_CORE_VERSION} source"
+PYDANTIC_CORE_ARCHIVE="$DEPS_DIR/pydantic_core-${PYDANTIC_CORE_VERSION}.tar.gz"
+if [ -f "$PYDANTIC_CORE_ARCHIVE" ]; then
+    echo "  Already downloaded"
+else
+    download "https://files.pythonhosted.org/packages/source/p/pydantic_core/pydantic_core-${PYDANTIC_CORE_VERSION}.tar.gz" "$PYDANTIC_CORE_ARCHIVE"
+fi
+
+echo ""
+echo "11. pydantic ${PYDANTIC_VERSION} source"
+PYDANTIC_ARCHIVE="$DEPS_DIR/pydantic-${PYDANTIC_VERSION}.tar.gz"
+if [ -f "$PYDANTIC_ARCHIVE" ]; then
+    echo "  Already downloaded"
+else
+    download "https://files.pythonhosted.org/packages/source/p/pydantic/pydantic-${PYDANTIC_VERSION}.tar.gz" "$PYDANTIC_ARCHIVE"
+fi
+
+echo ""
+echo "12. typing_extensions ${TYPING_EXTENSIONS_VERSION}"
+TYPING_EXT_ARCHIVE="$DEPS_DIR/typing_extensions-${TYPING_EXTENSIONS_VERSION}.tar.gz"
+if [ -f "$TYPING_EXT_ARCHIVE" ]; then
+    echo "  Already downloaded"
+else
+    download "https://files.pythonhosted.org/packages/source/t/typing_extensions/typing_extensions-${TYPING_EXTENSIONS_VERSION}.tar.gz" "$TYPING_EXT_ARCHIVE"
+fi
+
+echo ""
+echo "13. annotated_types ${ANNOTATED_TYPES_VERSION}"
+ANNOTATED_TYPES_ARCHIVE="$DEPS_DIR/annotated_types-${ANNOTATED_TYPES_VERSION}.tar.gz"
+if [ -f "$ANNOTATED_TYPES_ARCHIVE" ]; then
+    echo "  Already downloaded"
+else
+    download "https://files.pythonhosted.org/packages/source/a/annotated_types/annotated_types-${ANNOTATED_TYPES_VERSION}.tar.gz" "$ANNOTATED_TYPES_ARCHIVE"
+fi
+
+echo ""
+echo "14. typing_inspection ${TYPING_INSPECTION_VERSION}"
+TYPING_INSPECTION_ARCHIVE="$DEPS_DIR/typing_inspection-${TYPING_INSPECTION_VERSION}.tar.gz"
+if [ -f "$TYPING_INSPECTION_ARCHIVE" ]; then
+    echo "  Already downloaded"
+else
+    download "https://files.pythonhosted.org/packages/source/t/typing_inspection/typing_inspection-${TYPING_INSPECTION_VERSION}.tar.gz" "$TYPING_INSPECTION_ARCHIVE"
+fi
+
+# =============================================================================
+# Summary
+# =============================================================================
 echo ""
 echo "=== All dependencies ready ==="
 echo ""
-echo "WASI SDK: $WASI_SDK_PATH"
-echo "zlib:     $DEPS_DIR/wasi-zlib"
-echo "bzip2:    $DEPS_DIR/wasi-bzip2"
-echo "liblzma:  $DEPS_DIR/wasi-xz"
-echo "SQLite:   $DEPS_DIR/wasi-sqlite"
-echo "libxml2:  $DEPS_DIR/wasi-libxml2"
-echo "libxslt:  $DEPS_DIR/wasi-libxslt"
+echo "C Libraries (built):"
+echo "  WASI SDK: $WASI_SDK_PATH"
+echo "  zlib:     $DEPS_DIR/wasi-zlib"
+echo "  bzip2:    $DEPS_DIR/wasi-bzip2"
+echo "  liblzma:  $DEPS_DIR/wasi-xz"
+echo "  SQLite:   $DEPS_DIR/wasi-sqlite"
+echo "  libxml2:  $DEPS_DIR/wasi-libxml2"
+echo "  libxslt:  $DEPS_DIR/wasi-libxslt"
+echo ""
+echo "Source Downloads (to be built by separate scripts):"
+echo "  CPython:        $PYTHON_TARBALL"
+echo "  lxml:           $LXML_ARCHIVE"
+echo "  pydantic_core:  $PYDANTIC_CORE_ARCHIVE"
+echo "  pydantic:       $PYDANTIC_ARCHIVE"
+echo ""
+echo "Next steps:"
+echo "  Run ./scripts/build-all.sh to build everything"

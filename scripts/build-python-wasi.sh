@@ -1,14 +1,14 @@
 #!/bin/bash
 # Build CPython for WASI
-# Dependencies are managed by download-deps.sh and stored in deps/
+# Dependencies must be downloaded first with ./scripts/download-deps.sh
 
 set -e
 
 PYTHON_VERSION="3.13.7"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WADUP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PYTHON_DIR="$WADUP_ROOT/build/python-wasi"
 DEPS_DIR="$WADUP_ROOT/deps"
+PYTHON_DIR="$DEPS_DIR/wasi-python"
 
 # Check if Python is already built
 if [ -f "${PYTHON_DIR}/lib/libpython3.13.a" ]; then
@@ -33,39 +33,56 @@ WASI_SDK_VERSION="24.0"
 WASI_SDK_NAME="wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-${WASI_SDK_OS}"
 WASI_SDK_PATH="$DEPS_DIR/$WASI_SDK_NAME"
 
-# Ensure dependencies are downloaded
+# Check all required dependencies
 echo "Checking dependencies..."
-"$SCRIPT_DIR/download-deps.sh"
 
-# Verify dependencies exist
 if [ ! -d "$WASI_SDK_PATH" ]; then
     echo "ERROR: WASI SDK not found at $WASI_SDK_PATH"
+    echo "Run ./scripts/download-deps.sh first"
     exit 1
 fi
 
-# Python build uses /tmp for temporary files, but final libs come from deps/
-BUILD_TMP="/tmp/wadup-python-build-$$"
+if [ ! -f "$DEPS_DIR/wasi-zlib/lib/libz.a" ]; then
+    echo "ERROR: zlib not found. Run ./scripts/download-deps.sh first"
+    exit 1
+fi
+
+if [ ! -f "$DEPS_DIR/wasi-bzip2/lib/libbz2.a" ]; then
+    echo "ERROR: bzip2 not found. Run ./scripts/download-deps.sh first"
+    exit 1
+fi
+
+if [ ! -f "$DEPS_DIR/wasi-xz/lib/liblzma.a" ]; then
+    echo "ERROR: liblzma not found. Run ./scripts/download-deps.sh first"
+    exit 1
+fi
+
+if [ ! -f "$DEPS_DIR/wasi-sqlite/lib/libsqlite3.a" ]; then
+    echo "ERROR: SQLite not found. Run ./scripts/download-deps.sh first"
+    exit 1
+fi
+
+PYTHON_TARBALL="$DEPS_DIR/Python-${PYTHON_VERSION}.tar.xz"
+if [ ! -f "$PYTHON_TARBALL" ]; then
+    echo "ERROR: Python source not found at $PYTHON_TARBALL"
+    echo "Run ./scripts/download-deps.sh first"
+    exit 1
+fi
+
+echo "All dependencies found."
+
+# Python build uses deps/ for temporary files (cleaned up after build)
+BUILD_TMP="$DEPS_DIR/tmp-python-build"
+rm -rf "$BUILD_TMP"
 mkdir -p "$BUILD_TMP"
 
-# Download and build CPython
+# Build CPython
 echo ""
 echo "=== Building CPython ${PYTHON_VERSION} for WASI ==="
 
-# Download CPython
+# Extract CPython
 cd "$BUILD_TMP"
-PYTHON_TARBALL="Python-${PYTHON_VERSION}.tar.xz"
-if [ ! -f "$PYTHON_TARBALL" ]; then
-    echo "Downloading CPython ${PYTHON_VERSION}..."
-    if command -v curl &> /dev/null; then
-        curl -L -O "https://www.python.org/ftp/python/${PYTHON_VERSION}/${PYTHON_TARBALL}"
-    elif command -v wget &> /dev/null; then
-        wget "https://www.python.org/ftp/python/${PYTHON_VERSION}/${PYTHON_TARBALL}"
-    else
-        echo "ERROR: Neither curl nor wget found."
-        exit 1
-    fi
-fi
-
+echo "Extracting Python source..."
 tar xf "$PYTHON_TARBALL"
 cd "Python-${PYTHON_VERSION}"
 
@@ -75,10 +92,8 @@ patch -p1 < "$SCRIPT_DIR/patches/cpython-wasi-threading.patch"
 patch -p1 < "$SCRIPT_DIR/patches/cpython-wasi-gilstate.patch"
 
 # Enable frozen stdlib modules (required for WASI without filesystem)
-# Note: This increases the binary size but is necessary for standalone execution
 echo "Enabling frozen stdlib modules..."
 
-# Create a Python script to modify freeze_modules.py
 python3 << 'PYEOF'
 import re
 
@@ -200,7 +215,6 @@ echo "Regenerating frozen modules..."
 python3 Tools/build/freeze_modules.py
 
 # Create Setup.local to force modules to be built as builtin modules
-# Use paths from deps/ folder
 cat > Modules/Setup.local << EOF
 # Force modules to be built in (statically linked)
 *static*
@@ -226,7 +240,6 @@ BUILD_PYTHON_PATH=$(pwd)/python.exe
 cd ../..
 
 echo "Building WASI Python..."
-# Use our custom config.site which extends the official one with dlopen disabled
 export CONFIG_SITE="$SCRIPT_DIR/config.site-wasm32-wasi"
 export WASI_SDK_PATH="${WASI_SDK_PATH}"
 
@@ -278,11 +291,6 @@ fi
 # Copy headers
 cp -r ../../Include/* "${PYTHON_DIR}/include/"
 cp pyconfig.h "${PYTHON_DIR}/include/"
-
-# Note: We don't copy the Python stdlib to a separate directory
-# because we use frozen modules compiled into the binary.
-# This avoids the bytecode compilation crash issue at runtime.
-# See docs/PYDANTIC_WASM_INVESTIGATION.md for details.
 
 # Get back to original dir
 cd "$WADUP_ROOT"

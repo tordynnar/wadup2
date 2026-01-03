@@ -13,13 +13,8 @@ obj/
 examples/*/target/
 examples/*/Cargo.lock
 
-# Shared Python WASI build
-build/
-
-# Downloaded dependencies (WASI SDK, compression libs, etc.)
-deps/*
-# But keep our custom stubs
-!deps/wasi-stubs/
+# Downloaded dependencies and build artifacts (WASI SDK, compression libs, Python, etc.)
+deps/
 
 # Python WASM module build artifacts
 examples/python-*/src/*.o
@@ -61,4 +56,3 @@ official/
 # Python
 __pycache__/
 *.pyc
-tmp/

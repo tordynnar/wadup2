@@ -302,7 +302,7 @@ def main() -> int:
 
     # Set paths
     python_version = "3.13"
-    python_dir = wadup_root / "build" / "python-wasi"
+    python_dir = deps_dir / "wasi-python"
     output_dir = project_dir / "target"
 
     # Detect platform for WASI SDK
@@ -400,7 +400,8 @@ def main() -> int:
 
         # Copy WASI Python stubs (sysconfigdata, etc.)
         # These are copied AFTER C extension Python files so stubs can override/augment
-        wasi_stubs_python = deps_dir / "wasi-stubs" / "python"
+        # Stubs are in scripts/patches/wasi-stubs/python (not in deps/)
+        wasi_stubs_python = script_dir / "patches" / "wasi-stubs" / "python"
         if wasi_stubs_python.is_dir():
             # Copy top-level .py files
             for stub_file in wasi_stubs_python.glob("*.py"):

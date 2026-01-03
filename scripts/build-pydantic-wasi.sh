@@ -1,13 +1,12 @@
 #!/bin/bash
 # Build pydantic_core Rust extension and bundle full pydantic library for WASI
-# This script compiles pydantic_core and bundles all Python dependencies
+# Dependencies must be downloaded first with ./scripts/download-deps.sh
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WADUP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEPS_DIR="$WADUP_ROOT/deps"
-BUILD_DIR="$WADUP_ROOT/build"
 
 # Versions - pydantic 2.12.5 requires pydantic_core 2.41.5
 PYDANTIC_CORE_VERSION="2.41.5"
@@ -35,13 +34,49 @@ WASI_SDK_PATH="$DEPS_DIR/wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-${WASI_SDK_OS}"
 echo "=== Building pydantic_core ${PYDANTIC_CORE_VERSION} for WASI ==="
 
 # Check dependencies
-if [ ! -f "$BUILD_DIR/python-wasi/lib/libpython3.13.a" ]; then
+if [ ! -f "$DEPS_DIR/wasi-python/lib/libpython3.13.a" ]; then
     echo "ERROR: Python WASI not built. Run ./scripts/build-python-wasi.sh first"
     exit 1
 fi
 
 if [ ! -d "$WASI_SDK_PATH" ]; then
     echo "ERROR: WASI SDK not found. Run ./scripts/download-deps.sh first"
+    exit 1
+fi
+
+# Check source archives exist
+PYDANTIC_CORE_ARCHIVE="$DEPS_DIR/pydantic_core-${PYDANTIC_CORE_VERSION}.tar.gz"
+if [ ! -f "$PYDANTIC_CORE_ARCHIVE" ]; then
+    echo "ERROR: pydantic_core source not found at $PYDANTIC_CORE_ARCHIVE"
+    echo "Run ./scripts/download-deps.sh first"
+    exit 1
+fi
+
+PYDANTIC_ARCHIVE="$DEPS_DIR/pydantic-${PYDANTIC_VERSION}.tar.gz"
+if [ ! -f "$PYDANTIC_ARCHIVE" ]; then
+    echo "ERROR: pydantic source not found at $PYDANTIC_ARCHIVE"
+    echo "Run ./scripts/download-deps.sh first"
+    exit 1
+fi
+
+TYPING_EXT_ARCHIVE="$DEPS_DIR/typing_extensions-${TYPING_EXTENSIONS_VERSION}.tar.gz"
+if [ ! -f "$TYPING_EXT_ARCHIVE" ]; then
+    echo "ERROR: typing_extensions not found at $TYPING_EXT_ARCHIVE"
+    echo "Run ./scripts/download-deps.sh first"
+    exit 1
+fi
+
+ANNOTATED_TYPES_ARCHIVE="$DEPS_DIR/annotated_types-${ANNOTATED_TYPES_VERSION}.tar.gz"
+if [ ! -f "$ANNOTATED_TYPES_ARCHIVE" ]; then
+    echo "ERROR: annotated_types not found at $ANNOTATED_TYPES_ARCHIVE"
+    echo "Run ./scripts/download-deps.sh first"
+    exit 1
+fi
+
+TYPING_INSPECTION_ARCHIVE="$DEPS_DIR/typing_inspection-${TYPING_INSPECTION_VERSION}.tar.gz"
+if [ ! -f "$TYPING_INSPECTION_ARCHIVE" ]; then
+    echo "ERROR: typing_inspection not found at $TYPING_INSPECTION_ARCHIVE"
+    echo "Run ./scripts/download-deps.sh first"
     exit 1
 fi
 
@@ -57,46 +92,6 @@ mkdir -p "$DEPS_DIR/wasi-pydantic/python/pydantic_core"
 mkdir -p "$DEPS_DIR/wasi-pydantic/python/pydantic"
 mkdir -p "$DEPS_DIR/wasi-pydantic/python/annotated_types"
 mkdir -p "$DEPS_DIR/wasi-pydantic/python/typing_inspection"
-
-# Download pydantic_core source if needed
-PYDANTIC_CORE_ARCHIVE="$DEPS_DIR/pydantic_core-${PYDANTIC_CORE_VERSION}.tar.gz"
-if [ ! -f "$PYDANTIC_CORE_ARCHIVE" ]; then
-    echo "Downloading pydantic_core ${PYDANTIC_CORE_VERSION}..."
-    curl -L -o "$PYDANTIC_CORE_ARCHIVE" \
-        "https://files.pythonhosted.org/packages/source/p/pydantic_core/pydantic_core-${PYDANTIC_CORE_VERSION}.tar.gz"
-fi
-
-# Download pydantic (the high-level library)
-PYDANTIC_ARCHIVE="$DEPS_DIR/pydantic-${PYDANTIC_VERSION}.tar.gz"
-if [ ! -f "$PYDANTIC_ARCHIVE" ]; then
-    echo "Downloading pydantic ${PYDANTIC_VERSION}..."
-    curl -L -o "$PYDANTIC_ARCHIVE" \
-        "https://files.pythonhosted.org/packages/source/p/pydantic/pydantic-${PYDANTIC_VERSION}.tar.gz"
-fi
-
-# Download typing_extensions
-TYPING_EXT_ARCHIVE="$DEPS_DIR/typing_extensions-${TYPING_EXTENSIONS_VERSION}.tar.gz"
-if [ ! -f "$TYPING_EXT_ARCHIVE" ]; then
-    echo "Downloading typing_extensions ${TYPING_EXTENSIONS_VERSION}..."
-    curl -L -o "$TYPING_EXT_ARCHIVE" \
-        "https://files.pythonhosted.org/packages/source/t/typing_extensions/typing_extensions-${TYPING_EXTENSIONS_VERSION}.tar.gz"
-fi
-
-# Download annotated_types
-ANNOTATED_TYPES_ARCHIVE="$DEPS_DIR/annotated_types-${ANNOTATED_TYPES_VERSION}.tar.gz"
-if [ ! -f "$ANNOTATED_TYPES_ARCHIVE" ]; then
-    echo "Downloading annotated_types ${ANNOTATED_TYPES_VERSION}..."
-    curl -L -o "$ANNOTATED_TYPES_ARCHIVE" \
-        "https://files.pythonhosted.org/packages/source/a/annotated_types/annotated_types-${ANNOTATED_TYPES_VERSION}.tar.gz"
-fi
-
-# Download typing_inspection
-TYPING_INSPECTION_ARCHIVE="$DEPS_DIR/typing_inspection-${TYPING_INSPECTION_VERSION}.tar.gz"
-if [ ! -f "$TYPING_INSPECTION_ARCHIVE" ]; then
-    echo "Downloading typing_inspection ${TYPING_INSPECTION_VERSION}..."
-    curl -L -o "$TYPING_INSPECTION_ARCHIVE" \
-        "https://files.pythonhosted.org/packages/source/t/typing_inspection/typing_inspection-${TYPING_INSPECTION_VERSION}.tar.gz"
-fi
 
 # Extract all archives
 echo "Extracting archives..."
@@ -146,7 +141,7 @@ version=3.13
 shared=false
 abi3=false
 lib_name=python3.13
-lib_dir=$BUILD_DIR/python-wasi/lib
+lib_dir=$DEPS_DIR/wasi-python/lib
 pointer_width=32
 build_flags=
 suppress_build_script_link_lines=true
@@ -506,7 +501,6 @@ def parse_mypy_version(version: str) -> tuple[int, int, int]:
 PYEOF
 
 # Patch 3: pydantic/networks.py - wrap version import at the top
-# Replace the direct importlib.metadata import with a wrapper function
 NETWORKS_FILE="$DEPS_DIR/wasi-pydantic/python/pydantic/networks.py"
 if [ -f "$NETWORKS_FILE" ]; then
     PATCH_FILE="$NETWORKS_FILE" python3 << 'PYSCRIPT'

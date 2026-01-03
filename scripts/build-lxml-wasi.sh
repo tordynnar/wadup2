@@ -1,13 +1,12 @@
 #!/bin/bash
 # Build lxml C extension for WASI
-# This script compiles lxml.etree from the pre-cythonized C code
+# Dependencies must be downloaded first with ./scripts/download-deps.sh
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WADUP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEPS_DIR="$WADUP_ROOT/deps"
-BUILD_DIR="$WADUP_ROOT/build"
 
 # Versions
 LXML_VERSION="6.0.2"
@@ -36,8 +35,21 @@ if [ ! -f "$DEPS_DIR/wasi-libxml2/lib/libxml2.a" ]; then
     exit 1
 fi
 
-if [ ! -f "$BUILD_DIR/python-wasi/lib/libpython3.13.a" ]; then
+if [ ! -f "$DEPS_DIR/wasi-libxslt/lib/libxslt.a" ]; then
+    echo "ERROR: libxslt not built. Run ./scripts/download-deps.sh first"
+    exit 1
+fi
+
+if [ ! -f "$DEPS_DIR/wasi-python/lib/libpython3.13.a" ]; then
     echo "ERROR: Python WASI not built. Run ./scripts/build-python-wasi.sh first"
+    exit 1
+fi
+
+# Check lxml source exists
+LXML_ARCHIVE="$DEPS_DIR/lxml-${LXML_VERSION}.tar.gz"
+if [ ! -f "$LXML_ARCHIVE" ]; then
+    echo "ERROR: lxml source not found at $LXML_ARCHIVE"
+    echo "Run ./scripts/download-deps.sh first"
     exit 1
 fi
 
@@ -51,13 +63,6 @@ fi
 mkdir -p "$DEPS_DIR/wasi-lxml/lib"
 mkdir -p "$DEPS_DIR/wasi-lxml/python/lxml"
 
-# Download lxml source if needed
-LXML_ARCHIVE="$DEPS_DIR/lxml-${LXML_VERSION}.tar.gz"
-if [ ! -f "$LXML_ARCHIVE" ]; then
-    echo "Downloading lxml ${LXML_VERSION}..."
-    curl -L -o "$LXML_ARCHIVE" "https://files.pythonhosted.org/packages/source/l/lxml/lxml-${LXML_VERSION}.tar.gz"
-fi
-
 # Extract
 echo "Extracting..."
 cd "$DEPS_DIR"
@@ -69,14 +74,8 @@ cd "lxml-${LXML_VERSION}"
 CC="$WASI_SDK_PATH/bin/clang"
 AR="$WASI_SDK_PATH/bin/ar"
 
-# Check libxslt
-if [ ! -f "$DEPS_DIR/wasi-libxslt/lib/libxslt.a" ]; then
-    echo "ERROR: libxslt not built. Run ./scripts/download-deps.sh first"
-    exit 1
-fi
-
 # Include paths
-PYTHON_INCLUDE="$BUILD_DIR/python-wasi/include"
+PYTHON_INCLUDE="$DEPS_DIR/wasi-python/include"
 LIBXML2_INCLUDE="$DEPS_DIR/wasi-libxml2/include/libxml2"
 LIBXSLT_INCLUDE="$DEPS_DIR/wasi-libxslt/include"
 LXML_INCLUDE="$DEPS_DIR/lxml-${LXML_VERSION}/src/lxml/includes"
@@ -106,10 +105,6 @@ cp liblxml_etree.a "$DEPS_DIR/wasi-lxml/lib/"
 echo "Copying Python files..."
 cp src/lxml/__init__.py "$DEPS_DIR/wasi-lxml/python/lxml/"
 cp src/lxml/_elementpath.py "$DEPS_DIR/wasi-lxml/python/lxml/"
-
-# Note: The etree module is a C extension that will be registered
-# via PyImport_AppendInittab as "lxml.etree" before Python initialization.
-# No stub file is needed - the C extension is loaded directly.
 
 # Clean up
 cd "$DEPS_DIR"

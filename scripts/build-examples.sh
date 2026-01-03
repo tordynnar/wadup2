@@ -10,6 +10,33 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WADUP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEPS_DIR="$WADUP_ROOT/deps"
+
+# Detect platform and set WASI SDK path
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
+
+if [ "$OS" = "darwin" ]; then
+    WASI_SDK_OS="macos"
+elif [ "$OS" = "linux" ]; then
+    WASI_SDK_OS="linux"
+else
+    echo "ERROR: Unsupported OS: $OS"
+    exit 1
+fi
+
+WASI_SDK_VERSION="24.0"
+WASI_SDK_PATH="$DEPS_DIR/wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-${WASI_SDK_OS}"
+
+# Export for cargo builds
+export WASI_SDK_PATH
+
+# Check WASI SDK exists
+if [ ! -d "$WASI_SDK_PATH" ]; then
+    echo "ERROR: WASI SDK not found at $WASI_SDK_PATH"
+    echo "Run ./scripts/download-deps.sh first"
+    exit 1
+fi
 
 # Colors
 RED='\033[0;31m'

@@ -24,7 +24,7 @@ clean:
 
 # Compatibility: allow 'make python-check' to succeed
 python-check:
-	@if [ ! -f "$(WADUP_ROOT)/build/python-wasi/lib/libpython3.13.a" ]; then \
+	@if [ ! -f "$(WADUP_ROOT)/deps/wasi-python/lib/libpython3.13.a" ]; then \
 		echo "ERROR: CPython not built. Run ./scripts/build-python-wasi.sh first"; \
 		exit 1; \
 	fi
