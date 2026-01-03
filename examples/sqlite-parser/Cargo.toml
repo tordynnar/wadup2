@@ -10,4 +10,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wadup-guest = { path = "../../crates/wadup-guest" }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "wasm32-wasi-vfs"] }
