@@ -404,8 +404,6 @@ test_python_pydantic() {
         print_error "pydantic_core version not found"
         return 1
     fi
-
-    print_info "pydantic_core $pydantic_core_version validation working"
 }
 
 # ============================================================
