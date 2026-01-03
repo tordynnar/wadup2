@@ -8,8 +8,8 @@ A high-performance parallel processing framework that executes sandboxed WebAsse
 - **Module Reuse**: WASM modules loaded once at startup and reused across all files, eliminating per-file initialization overhead
 - **Sandboxed Execution**: WASM modules run in isolated environments with configurable resource limits
 - **Resource Control**: CPU (fuel), memory, stack size, and recursion depth limits
-- **Metadata Collection**: SQLite database with automatic schema validation
-- **Output Capture**: Module stdout/stderr captured and stored per-module in the database
+- **Metadata Collection**: Elasticsearch for scalable, searchable metadata storage
+- **Output Capture**: Module stdout/stderr captured and stored per-module in JSON documents
 - **Zero-Copy Architecture**: Memory-mapped file loading and SharedBuffer-based content slicing without duplication
 - **Recursive Processing**: Sub-content automatically queued for processing
 - **Ergonomic API**: Rust guest library for easy WASM module development
@@ -35,11 +35,19 @@ cargo build --release
 ### Basic Usage
 
 ```bash
-wadup \
+# Start Elasticsearch and Kibana
+docker-compose up -d
+
+# Run WADUP
+wadup run \
   --modules ./modules \
   --input ./data \
-  --output results.db \
+  --es-url http://localhost:9200 \
+  --es-index wadup \
   --threads 8
+
+# View results in Kibana
+open http://localhost:5601
 ```
 
 ## Writing WASM Modules
@@ -194,6 +202,8 @@ The compiled `.wasm` file can then be placed in your modules directory.
 ## CLI Options
 
 ```
+wadup run [OPTIONS]
+
 Options:
   --modules <MODULES>
       Directory containing WASM modules
@@ -201,8 +211,11 @@ Options:
   --input <INPUT>
       Directory containing input files
 
-  --output <OUTPUT>
-      Output SQLite database path
+  --es-url <ES_URL>
+      Elasticsearch URL [default: http://localhost:9200]
+
+  --es-index <ES_INDEX>
+      Elasticsearch index name [default: wadup]
 
   --threads <THREADS>
       Number of worker threads [default: 4]
@@ -232,7 +245,7 @@ The processing engine containing:
 - **SharedBuffer**: Zero-copy memory abstraction using `bytes::Bytes` with memory-mapped file loading
 - **Content Store**: Zero-copy content management with SharedBuffer-based slicing
 - **WASM Runtime**: wasmtime integration with resource limits and virtual filesystem
-- **Metadata Store**: SQLite with schema validation and WAL mode
+- **Metadata Store**: Elasticsearch client with document accumulation
 - **Processor**: Work-stealing parallel execution
 - **Host Bindings**: FFI exports for WASM modules (define_table, insert_row, emit_subcontent, etc.)
 
@@ -345,118 +358,186 @@ SubContent::emit_slice(
 )?;
 ```
 
-## Metadata Store
+## Elasticsearch & Kibana
 
-WADUP uses a SQLite database as its metadata store, with WAL mode enabled for concurrent access. The store manages two types of tables:
+WADUP stores metadata in Elasticsearch, with one JSON document per processed content item. Each document contains all module outputs, stdout/stderr, and processing metadata.
 
-### System Tables
+### Starting the Services
 
-WADUP automatically creates two system tables:
+```bash
+# Start Elasticsearch and Kibana
+docker-compose up -d
 
-#### `__wadup_content`
+# Elasticsearch: http://localhost:9200
+# Kibana:        http://localhost:5601
 
-Tracks all processed content:
+# Stop services
+docker-compose down
 
-```sql
-CREATE TABLE __wadup_content (
-    uuid TEXT PRIMARY KEY,        -- Unique identifier for this content
-    filename TEXT NOT NULL,       -- Original filename or extracted name
-    parent_uuid TEXT,             -- Parent content UUID (NULL for top-level files)
-    processed_at INTEGER NOT NULL, -- Unix timestamp of processing
-    status TEXT NOT NULL,         -- 'success' or 'failed'
-    error_message TEXT            -- Error details if status='failed'
-);
+# Stop and remove all data
+docker-compose down -v
 ```
 
-The `parent_uuid` column enables tracking of content hierarchies. For example, when a ZIP extractor module emits files from an archive, those files reference the ZIP's UUID as their parent.
+### JSON Document Structure
 
-#### `__wadup_module_output`
+Each content item produces one document:
 
-Captures stdout and stderr from each module per content:
-
-```sql
-CREATE TABLE __wadup_module_output (
-    content_uuid TEXT NOT NULL,      -- References __wadup_content(uuid)
-    module_name TEXT NOT NULL,       -- Name of the WASM module
-    stdout TEXT,                     -- Captured stdout (NULL if empty)
-    stderr TEXT,                     -- Captured stderr (NULL if empty)
-    stdout_truncated INTEGER NOT NULL, -- 1 if stdout exceeded 1MB limit
-    stderr_truncated INTEGER NOT NULL, -- 1 if stderr exceeded 1MB limit
-    PRIMARY KEY (content_uuid, module_name),
-    FOREIGN KEY (content_uuid) REFERENCES __wadup_content(uuid)
-);
+```json
+{
+  "uuid": "4757c08a-2ded-4637-b170-eae8f52fd3c4",
+  "filename": "sample.db",
+  "parent_uuid": null,
+  "processed_at": "2024-01-03T12:00:00Z",
+  "status": "success",
+  "error_message": null,
+  "modules": {
+    "sqlite_parser": {
+      "stdout": null,
+      "stderr": null,
+      "stdout_truncated": false,
+      "stderr_truncated": false,
+      "tables": {
+        "db_table_stats": [
+          ["users", "100"],
+          ["posts", "50"]
+        ]
+      }
+    },
+    "byte_counter": {
+      "stdout": null,
+      "stderr": null,
+      "stdout_truncated": false,
+      "stderr_truncated": false,
+      "tables": {
+        "file_sizes": [
+          ["16384"]
+        ]
+      }
+    }
+  }
+}
 ```
 
-This enables debugging and logging from modules. Output is captured silently (not echoed to terminal) and stored per-module. Each stream is limited to 1MB to prevent database bloat.
+Key fields:
+- **uuid**: Unique identifier for this content
+- **filename**: Original filename or extracted name
+- **parent_uuid**: Parent content UUID (null for top-level files)
+- **status**: `"success"` or `"failed"`
+- **modules**: Nested object with each module's output
+- **tables**: Module-defined tables as arrays of row values
 
-### Module-Defined Tables
+### Using Kibana
 
-Modules define custom tables to store extracted metadata. Each table automatically includes a `content_uuid` column as a foreign key:
+1. Open http://localhost:5601
+2. Go to **Management > Stack Management > Data Views**
+3. Click **Create data view**
+4. Enter `wadup*` as the index pattern
+5. Click **Save data view to Kibana**
 
-```sql
--- Example: Module defines table "file_sizes" with column "size_bytes"
-CREATE TABLE file_sizes (
-    content_uuid TEXT NOT NULL,   -- Auto-added, references __wadup_content(uuid)
-    size_bytes INTEGER,           -- Module-defined column
-    FOREIGN KEY(content_uuid) REFERENCES __wadup_content(uuid)
-);
+#### Discover (Search & Browse)
+
+1. Go to **Analytics > Discover**
+2. Select your `wadup*` data view
+3. Use the search bar for queries:
+
+```
+# Find all successful content
+status: "success"
+
+# Find content by filename
+filename: "sample.db"
+
+# Find content with specific module
+modules.sqlite_parser.tables.db_table_stats: *
+
+# Find failed content
+status: "failed"
+
+# Find sub-content (has parent)
+parent_uuid: *
+```
+
+#### Dev Tools (Raw Queries)
+
+Go to **Management > Dev Tools** for direct Elasticsearch queries:
+
+```json
+# List all documents
+GET wadup/_search
+{
+  "size": 100
+}
+
+# Find by filename
+GET wadup/_search
+{
+  "query": {
+    "match": { "filename": "sample.db" }
+  }
+}
+
+# Find all sub-content of a parent
+GET wadup/_search
+{
+  "query": {
+    "term": { "parent_uuid": "4757c08a-2ded-4637-b170-eae8f52fd3c4" }
+  }
+}
+
+# Count documents by status
+GET wadup/_search
+{
+  "size": 0,
+  "aggs": {
+    "by_status": {
+      "terms": { "field": "status.keyword" }
+    }
+  }
+}
+
+# Find content with errors
+GET wadup/_search
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "term": { "status.keyword": "failed" } }
+      ]
+    }
+  }
+}
+```
+
+### Command-Line Queries
+
+Query directly with curl:
+
+```bash
+# Count all documents
+curl -s "http://localhost:9200/wadup/_count" | jq
+
+# Search all documents
+curl -s "http://localhost:9200/wadup/_search?pretty&size=10"
+
+# Find by filename
+curl -s "http://localhost:9200/wadup/_search?pretty" -H "Content-Type: application/json" -d '
+{
+  "query": { "match": { "filename": "sample.db" } }
+}'
+
+# Get a specific document by UUID
+curl -s "http://localhost:9200/wadup/_doc/4757c08a-2ded-4637-b170-eae8f52fd3c4?pretty"
 ```
 
 ### Data Types
 
-Modules can use three data types for columns:
+Modules can use three data types for table columns. All values are stored as strings in Elasticsearch to avoid mapping conflicts:
 
-| Type | SQLite Type | Description |
-|------|-------------|-------------|
-| `Int64` | INTEGER | 64-bit signed integer |
-| `Float64` | REAL | 64-bit floating point |
-| `String` | TEXT | UTF-8 string |
-
-### Schema Validation
-
-When multiple modules or files define the same table, WADUP validates that schemas match exactly (same column names, same types, same order). Schema mismatches cause processing errors.
-
-### Example Queries
-
-```sql
--- List all processed files with status
-SELECT filename, status, error_message FROM __wadup_content;
-
--- Find all content extracted from a specific file
-SELECT c2.filename, c2.status
-FROM __wadup_content c1
-JOIN __wadup_content c2 ON c2.parent_uuid = c1.uuid
-WHERE c1.filename = 'archive.zip';
-
--- Join module data with content info
-SELECT c.filename, f.size_bytes
-FROM file_sizes f
-JOIN __wadup_content c ON c.uuid = f.content_uuid
-WHERE c.status = 'success';
-
--- Trace content ancestry (recursive)
-WITH RECURSIVE ancestry AS (
-    SELECT uuid, filename, parent_uuid, 0 as depth
-    FROM __wadup_content WHERE filename = 'nested/file.txt'
-    UNION ALL
-    SELECT c.uuid, c.filename, c.parent_uuid, a.depth + 1
-    FROM __wadup_content c
-    JOIN ancestry a ON c.uuid = a.parent_uuid
-)
-SELECT * FROM ancestry;
-
--- View module stdout/stderr for a file
-SELECT c.filename, m.module_name, m.stdout, m.stderr
-FROM __wadup_module_output m
-JOIN __wadup_content c ON c.uuid = m.content_uuid
-WHERE c.filename LIKE '%example.json%';
-
--- Find modules that produced errors (stderr)
-SELECT DISTINCT module_name, COUNT(*) as error_count
-FROM __wadup_module_output
-WHERE stderr IS NOT NULL
-GROUP BY module_name;
-```
+| Type | Description | Example |
+|------|-------------|---------|
+| `Int64` | 64-bit signed integer | `"42"` |
+| `Float64` | 64-bit floating point | `"3.14"` |
+| `String` | UTF-8 string | `"hello"` |
 
 ## Examples
 
@@ -624,22 +705,25 @@ cargo build --target wasm32-wasip1 --release
 ### Testing
 
 ```bash
+# Start Elasticsearch
+docker-compose up -d elasticsearch
+
 # Run the framework on test data
 mkdir -p test-modules test-input
 
 cp examples/byte-counter/target/wasm32-wasip1/release/byte_counter.wasm test-modules/
 echo "Hello, WADUP!" > test-input/test.txt
 
-./target/release/wadup \
+./target/release/wadup run \
   --modules test-modules \
   --input test-input \
-  --output test.db
+  --es-index test
 
 # Query results
-sqlite3 test.db "SELECT * FROM file_sizes"
+curl -s "http://localhost:9200/test/_search?pretty"
 
 # Run integration tests
-cargo test --release --test integration_tests
+./scripts/run-integration-tests.sh
 ```
 
 ## License

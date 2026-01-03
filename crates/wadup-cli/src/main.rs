@@ -40,8 +40,11 @@ enum Commands {
         #[arg(long, help = "Directory containing input files")]
         input: PathBuf,
 
-        #[arg(long, help = "Output SQLite database path")]
-        output: PathBuf,
+        #[arg(long, default_value = "http://localhost:9200", help = "Elasticsearch URL")]
+        es_url: String,
+
+        #[arg(long, default_value = "wadup", help = "Elasticsearch index name")]
+        es_index: String,
 
         #[arg(long, default_value = "4", help = "Number of worker threads")]
         threads: usize,
@@ -80,8 +83,8 @@ fn main() -> Result<()> {
         Commands::Compile { modules, fuel, max_memory, max_stack } => {
             run_compile(modules, fuel, max_memory, max_stack)
         }
-        Commands::Run { modules, input, output, threads, fuel, max_memory, max_stack, max_recursion_depth } => {
-            run_process(modules, input, output, threads, fuel, max_memory, max_stack, max_recursion_depth)
+        Commands::Run { modules, input, es_url, es_index, threads, fuel, max_memory, max_stack, max_recursion_depth } => {
+            run_process(modules, input, es_url, es_index, threads, fuel, max_memory, max_stack, max_recursion_depth)
         }
     }
 }
@@ -134,7 +137,8 @@ fn run_compile(
 fn run_process(
     modules: PathBuf,
     input: PathBuf,
-    output: PathBuf,
+    es_url: String,
+    es_index: String,
     threads: usize,
     fuel: Option<u64>,
     max_memory: Option<usize>,
@@ -167,7 +171,8 @@ fn run_process(
     tracing::info!("Configuration:");
     tracing::info!("  Modules directory: {:?}", modules);
     tracing::info!("  Input directory: {:?}", input);
-    tracing::info!("  Output database: {:?}", output);
+    tracing::info!("  Elasticsearch URL: {}", es_url);
+    tracing::info!("  Elasticsearch index: {}", es_index);
     tracing::info!("  Worker threads: {}", threads);
     tracing::info!("  Max recursion depth: {}", max_recursion_depth);
 
@@ -194,9 +199,9 @@ fn run_process(
     let mut runtime = WasmRuntime::new(limits)?;
     runtime.load_modules(&modules)?;
 
-    // Create metadata store
-    tracing::info!("Initializing metadata store...");
-    let metadata_store = MetadataStore::new(output.to_str().unwrap())?;
+    // Create metadata store (connects to Elasticsearch)
+    tracing::info!("Connecting to Elasticsearch...");
+    let metadata_store = MetadataStore::new(&es_url, &es_index)?;
 
     // Load input files
     tracing::info!("Loading input files...");
@@ -215,7 +220,7 @@ fn run_process(
     processor.process(contents, threads)?;
 
     tracing::info!("============================================");
-    tracing::info!("Processing complete! Results written to: {:?}", output);
+    tracing::info!("Processing complete! Results indexed to: {}/{}", es_url, es_index);
 
     Ok(())
 }

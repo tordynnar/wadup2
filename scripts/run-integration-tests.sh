@@ -16,6 +16,10 @@ WADUP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WADUP_BIN="$WADUP_ROOT/target/release/wadup"
 FIXTURES_DIR="$WADUP_ROOT/tests/fixtures"
 
+# Elasticsearch configuration
+ES_URL="http://localhost:9200"
+ES_INDEX="wadup_test"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -61,6 +65,64 @@ check_prerequisites() {
         print_info "Run ./scripts/build-examples.sh first"
         exit 1
     fi
+}
+
+# Start Elasticsearch using docker-compose
+start_elasticsearch() {
+    print_info "Starting Elasticsearch..."
+
+    # Check if already running
+    if curl -s "$ES_URL/_cluster/health" > /dev/null 2>&1; then
+        print_success "Elasticsearch already running"
+        return 0
+    fi
+
+    # Start with docker-compose
+    docker-compose -f "$WADUP_ROOT/docker-compose.yml" up -d elasticsearch
+
+    # Wait for Elasticsearch to be ready
+    local max_wait=60
+    local waited=0
+    while ! curl -s "$ES_URL/_cluster/health" > /dev/null 2>&1; do
+        if [[ $waited -ge $max_wait ]]; then
+            print_error "Elasticsearch failed to start within ${max_wait}s"
+            exit 1
+        fi
+        sleep 2
+        waited=$((waited + 2))
+        echo -n "."
+    done
+    echo ""
+    print_success "Elasticsearch started"
+}
+
+# Clear the Elasticsearch index
+clear_es_index() {
+    # Delete the index if it exists (ignore errors if it doesn't)
+    curl -s -X DELETE "$ES_URL/$ES_INDEX" > /dev/null 2>&1 || true
+
+    # Create fresh index
+    curl -s -X PUT "$ES_URL/$ES_INDEX" -H "Content-Type: application/json" -d '{}' > /dev/null
+}
+
+# Refresh Elasticsearch index to ensure data is searchable
+refresh_es_index() {
+    curl -s -X POST "$ES_URL/$ES_INDEX/_refresh" > /dev/null 2>&1 || true
+}
+
+# Query Elasticsearch and return result
+# Usage: query_es "jq_filter"
+# The jq_filter operates on the full search response
+query_es() {
+    local jq_filter="$1"
+    refresh_es_index
+    curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+result = $jq_filter
+if result is not None:
+    print(result)
+"
 }
 
 # Get WASM path for a module
@@ -122,14 +184,14 @@ run_test() {
 setup_test_env() {
     MODULES_DIR=$(mktemp -d)
     INPUT_DIR=$(mktemp -d)
-    OUTPUT_DB=$(mktemp)
-    rm "$OUTPUT_DB"  # Remove so wadup creates it
-    OUTPUT_DB="${OUTPUT_DB}.db"
+
+    # Clear ES index before each test
+    clear_es_index
 }
 
 # Cleanup temp directories
 cleanup_test_env() {
-    rm -rf "$MODULES_DIR" "$INPUT_DIR" "$OUTPUT_DB" 2>/dev/null || true
+    rm -rf "$MODULES_DIR" "$INPUT_DIR" 2>/dev/null || true
 }
 
 # Copy module to test directory
@@ -160,34 +222,84 @@ run_wadup() {
     "$WADUP_BIN" run \
         --modules "$MODULES_DIR" \
         --input "$INPUT_DIR" \
-        --output "$OUTPUT_DB" \
+        --es-url "$ES_URL" \
+        --es-index "$ES_INDEX" \
         "${extra_args[@]}" \
         2>&1
 }
 
-# Query SQLite and return result
-query_db() {
-    local query="$1"
-    sqlite3 "$OUTPUT_DB" "$query"
-}
-
-# Assert table exists
+# Assert table exists in at least one document
 assert_table_exists() {
     local table="$1"
-    local count=$(query_db "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='$table'")
+
+    refresh_es_index
+
+    # Search for documents that have this table in any module
+    local count=$(curl -s "$ES_URL/$ES_INDEX/_search" -H "Content-Type: application/json" -d "
+{
+  \"query\": {
+    \"bool\": {
+      \"should\": [
+        { \"exists\": { \"field\": \"modules.*.tables.$table\" } }
+      ],
+      \"minimum_should_match\": 1
+    }
+  },
+  \"size\": 0
+}" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(data.get('hits', {}).get('total', {}).get('value', 0))
+")
+
+    # If the exists query didn't work, try a different approach
     if [[ "$count" -eq 0 ]]; then
-        print_error "Table '$table' not found"
+        # Search all documents and check manually
+        count=$(curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+table_name = '$table'
+count = 0
+for hit in data.get('hits', {}).get('hits', []):
+    source = hit.get('_source', {})
+    modules = source.get('modules', {})
+    for module_name, module_data in modules.items():
+        if table_name in module_data.get('tables', {}):
+            count += 1
+            break
+print(count)
+")
+    fi
+
+    if [[ "$count" -eq 0 ]]; then
+        print_error "Table '$table' not found in any document"
         return 1
     fi
 }
 
-# Assert row count
+# Assert total row count across all documents
 assert_row_count() {
     local table="$1"
     local expected="$2"
     local op="${3:-eq}"  # eq, ge, gt, le, lt
 
-    local count=$(query_db "SELECT COUNT(*) FROM $table")
+    refresh_es_index
+
+    # Count rows in the table across all documents
+    local count=$(curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+table_name = '$table'
+total_rows = 0
+for hit in data.get('hits', {}).get('hits', []):
+    source = hit.get('_source', {})
+    modules = source.get('modules', {})
+    for module_name, module_data in modules.items():
+        tables = module_data.get('tables', {})
+        if table_name in tables:
+            total_rows += len(tables[table_name])
+print(total_rows)
+")
 
     case "$op" in
         eq) [[ "$count" -eq "$expected" ]] || { print_error "Expected $expected rows in $table, got $count"; return 1; } ;;
@@ -198,11 +310,33 @@ assert_row_count() {
     esac
 }
 
-# Assert value equals
+# Assert specific value in a table
+# Usage: assert_value "table" "column_index" "expected_value" ["row_filter_python_expr"]
 assert_value() {
-    local query="$1"
-    local expected="$2"
-    local actual=$(query_db "$query")
+    local table="$1"
+    local column_index="$2"
+    local expected="$3"
+    local filter="${4:-True}"  # Optional row filter
+
+    refresh_es_index
+
+    local actual=$(curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+table_name = '$table'
+col_idx = $column_index
+for hit in data.get('hits', {}).get('hits', []):
+    source = hit.get('_source', {})
+    modules = source.get('modules', {})
+    for module_name, module_data in modules.items():
+        tables = module_data.get('tables', {})
+        if table_name in tables:
+            for row in tables[table_name]:
+                if $filter:
+                    if col_idx < len(row):
+                        print(row[col_idx])
+                        sys.exit(0)
+")
 
     if [[ "$actual" != "$expected" ]]; then
         print_error "Expected '$expected', got '$actual'"
@@ -300,7 +434,22 @@ test_python_module_reuse() {
     assert_table_exists "call_counter" || return 1
 
     # Verify counter increments (module reuse)
-    local values=$(query_db "SELECT call_number FROM call_counter ORDER BY call_number")
+    refresh_es_index
+    local values=$(curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+values = []
+for hit in data.get('hits', {}).get('hits', []):
+    source = hit.get('_source', {})
+    modules = source.get('modules', {})
+    for module_name, module_data in modules.items():
+        tables = module_data.get('tables', {})
+        if 'call_counter' in tables:
+            for row in tables['call_counter']:
+                values.append(row[0])
+values.sort()
+print('\\n'.join(str(v) for v in values))
+")
     local expected=$'1\n2\n3'
 
     if [[ "$values" != "$expected" ]]; then
@@ -347,9 +496,16 @@ test_simple_module() {
     # Simple module doesn't create tables, just verify wadup runs without error
     run_wadup > /dev/null || return 1
 
-    # Verify the database was created
-    if [[ ! -f "$OUTPUT_DB" ]]; then
-        print_error "Output database was not created"
+    # Verify at least one document was indexed
+    refresh_es_index
+    local count=$(curl -s "$ES_URL/$ES_INDEX/_count" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(data.get('count', 0))
+")
+
+    if [[ "$count" -eq 0 ]]; then
+        print_error "No documents were indexed"
         return 1
     fi
 }
@@ -392,14 +548,41 @@ test_python_pydantic() {
     assert_row_count "users" 3 || return 1
 
     # Verify status is success
-    local status=$(query_db "SELECT value FROM info WHERE key='status'")
+    refresh_es_index
+    local status=$(curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for hit in data.get('hits', {}).get('hits', []):
+    source = hit.get('_source', {})
+    modules = source.get('modules', {})
+    for module_name, module_data in modules.items():
+        tables = module_data.get('tables', {})
+        if 'info' in tables:
+            for row in tables['info']:
+                if len(row) >= 2 and row[0] == 'status':
+                    print(row[1])
+                    sys.exit(0)
+")
     if [[ "$status" != "success" ]]; then
         print_error "Expected status 'success', got '$status'"
         return 1
     fi
 
     # Verify pydantic_core version (we use pydantic_core directly, not high-level pydantic)
-    local pydantic_core_version=$(query_db "SELECT value FROM info WHERE key='pydantic_core_version'")
+    local pydantic_core_version=$(curl -s "$ES_URL/$ES_INDEX/_search?size=1000" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for hit in data.get('hits', {}).get('hits', []):
+    source = hit.get('_source', {})
+    modules = source.get('modules', {})
+    for module_name, module_data in modules.items():
+        tables = module_data.get('tables', {})
+        if 'info' in tables:
+            for row in tables['info']:
+                if len(row) >= 2 and row[0] == 'pydantic_core_version':
+                    print(row[1])
+                    sys.exit(0)
+")
     if [[ -z "$pydantic_core_version" ]]; then
         print_error "pydantic_core version not found"
         return 1
@@ -445,6 +628,7 @@ print_timing_table() {
 # ============================================================
 
 check_prerequisites
+start_elasticsearch
 
 # Define all tests
 ALL_TESTS=(

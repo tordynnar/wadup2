@@ -198,13 +198,13 @@ impl WorkerThread {
             self.content_store.insert(content.uuid, owned_data.clone());
         }
 
-        // Record content in database FIRST (before processing) so foreign keys work
+        // Start accumulating document data for this content
         let parent_uuid_str = content.parent_uuid.map(|u| u.to_string());
         let parent_uuid_ref = parent_uuid_str.as_deref();
+        let content_uuid_str = content.uuid.to_string();
 
-        // Insert a "processing" placeholder that we'll update later
-        self.metadata_store.record_content_success(
-            &content.uuid.to_string(),
+        self.metadata_store.start_content(
+            &content_uuid_str,
             &content.filename,
             parent_uuid_ref,
         )?;
@@ -214,6 +214,9 @@ impl WorkerThread {
 
         // Process through each module
         for instance in &mut self.instances {
+            // Set current module context for metadata accumulation
+            self.metadata_store.set_current_module(&content_uuid_str, instance.name())?;
+
             match instance.process_content(content.uuid, data.clone()) {
                 Ok(ctx) => {
                     // First, define any tables requested by the module
@@ -270,24 +273,12 @@ impl WorkerThread {
             }
         }
 
-        // Record content processing result
-        let parent_uuid_str = content.parent_uuid.map(|u| u.to_string());
-        let parent_uuid_ref = parent_uuid_str.as_deref();
-
+        // Finalize content document and POST to Elasticsearch
         if processing_errors.is_empty() {
-            self.metadata_store.record_content_success(
-                &content.uuid.to_string(),
-                &content.filename,
-                parent_uuid_ref,
-            )?;
+            self.metadata_store.finalize_content_success(&content_uuid_str)?;
         } else {
             let error_summary = processing_errors.join("; ");
-            self.metadata_store.record_content_failure(
-                &content.uuid.to_string(),
-                &content.filename,
-                parent_uuid_ref,
-                &error_summary,
-            )?;
+            self.metadata_store.finalize_content_failure(&content_uuid_str, &error_summary)?;
         }
 
         // Process sub-content (depth-first)
