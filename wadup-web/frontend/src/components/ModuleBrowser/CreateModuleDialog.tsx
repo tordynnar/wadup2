@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { X } from 'lucide-react'
 import { useModuleStore } from '../../stores/moduleStore'
 import type { Language } from '../../types'
+import GopherIcon from './GopherIcon'
 
 interface CreateModuleDialogProps {
   onClose: () => void
@@ -88,7 +89,7 @@ export default function CreateModuleDialog({ onClose, onCreated }: CreateModuleD
                 onClick={() => setLanguage('go')}
                 disabled={isCreating}
               >
-                <span className="language-icon">🔷</span>
+                <span className="language-icon"><GopherIcon size={28} /></span>
                 <span>Go</span>
               </button>
               <button

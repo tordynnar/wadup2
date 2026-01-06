@@ -255,6 +255,9 @@
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.15s ease;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .language-option:hover {
