@@ -67,7 +67,7 @@ export default function ModuleEditor() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [handleSave])
 
-  if (isLoadingModule) {
+  if (isLoadingModule && !currentModule) {
     return (
       <div className="editor-loading">
         <div className="loading-spinner" />
