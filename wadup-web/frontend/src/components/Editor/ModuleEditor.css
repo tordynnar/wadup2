@@ -238,6 +238,14 @@
   color: var(--text-secondary);
 }
 
+.build-log-notice {
+  padding: 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  font-style: italic;
+}
+
 .build-status {
   display: flex;
   align-items: center;
