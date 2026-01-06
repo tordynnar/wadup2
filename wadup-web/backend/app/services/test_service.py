@@ -103,17 +103,21 @@ class TestService:
                         test_run.stdout = output.get("stdout", "")
                         test_run.stderr = output.get("stderr", "")
                         test_run.metadata_output = output.get("metadata")
+                        test_run.subcontent_output = output.get("subcontent")
                         self._add_output(run_id, "Test completed successfully!")
 
                         if test_run.stdout:
                             self._add_output(run_id, f"stdout: {test_run.stdout[:200]}")
                         if test_run.metadata_output:
                             self._add_output(run_id, f"Metadata: {json.dumps(test_run.metadata_output)[:200]}")
+                        if test_run.subcontent_output:
+                            self._add_output(run_id, f"Subcontent: {len(test_run.subcontent_output)} file(s)")
                     else:
                         test_run.status = TestStatus.FAILED
                         test_run.error_message = output.get("error", f"Exit code: {output.get('exit_code', exit_code)}")
                         test_run.stdout = output.get("stdout", "")
                         test_run.stderr = output.get("stderr", "")
+                        test_run.subcontent_output = output.get("subcontent")
                         self._add_output(run_id, f"Test failed: {test_run.error_message}")
                         if test_run.stderr:
                             self._add_output(run_id, f"stderr: {test_run.stderr[:500]}")

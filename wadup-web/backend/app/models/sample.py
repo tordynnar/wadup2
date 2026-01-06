@@ -47,6 +47,7 @@ class TestRun(Base):
     stdout = Column(Text, nullable=True)
     stderr = Column(Text, nullable=True)
     metadata_output = Column(JSON, nullable=True)  # Parsed metadata tables
+    subcontent_output = Column(JSON, nullable=True)  # Extracted subcontent files
     error_message = Column(Text, nullable=True)
 
     # Timestamps

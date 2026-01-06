@@ -47,6 +47,9 @@
 
   --success: var(--ctp-green);
   --warning: var(--ctp-yellow);
+  --warning-bg: rgba(249, 226, 175, 0.1);
+  --warning-border: rgba(249, 226, 175, 0.3);
+  --warning-text: var(--ctp-yellow);
   --error: var(--ctp-red);
   --info: var(--ctp-blue);
 

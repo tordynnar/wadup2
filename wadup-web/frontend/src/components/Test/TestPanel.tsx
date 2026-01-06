@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { X, FlaskConical, Upload, Trash2, Play, CheckCircle, XCircle, Loader } from 'lucide-react'
 import { samplesApi, testApi } from '../../api/samples'
 import type { Sample, TestRun } from '../../types'
+import TestResultViewer from './TestResultViewer'
 import './TestPanel.css'
 
 interface TestPanelProps {
@@ -200,20 +201,15 @@ export default function TestPanel({ moduleId, onClose }: TestPanelProps) {
                       <span>{sample?.filename || `Sample ${result.sample_id}`}</span>
                       <span className="test-result-status">{result.status}</span>
                     </div>
-                    {result.status === 'success' && result.metadata_output && (
-                      <div className="test-result-output">
-                        <pre>{JSON.stringify(result.metadata_output, null, 2)}</pre>
-                      </div>
+                    {result.status === 'success' && (
+                      <TestResultViewer
+                        metadata={result.metadata_output}
+                        subcontent={result.subcontent_output}
+                      />
                     )}
                     {result.status === 'failed' && result.error_message && (
                       <div className="test-result-error">
                         {result.error_message}
-                      </div>
-                    )}
-                    {result.stdout && (
-                      <div className="test-result-stdout">
-                        <strong>stdout:</strong>
-                        <pre>{result.stdout}</pre>
                       </div>
                     )}
                     {result.stderr && (

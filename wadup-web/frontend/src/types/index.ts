@@ -68,6 +68,36 @@ export interface Sample {
 // Test types
 export type TestStatus = 'pending' | 'running' | 'success' | 'failed'
 
+// Metadata output structure from WADUP modules
+export interface MetadataColumn {
+  name: string
+  data_type: string
+}
+
+export interface MetadataTable {
+  name: string
+  columns: MetadataColumn[]
+}
+
+export interface MetadataRow {
+  table_name: string
+  values: Record<string, unknown>[]
+}
+
+export interface MetadataOutput {
+  tables: MetadataTable[]
+  rows: MetadataRow[]
+}
+
+export interface SubcontentItem {
+  index: number
+  filename: string | null
+  data_hex: string
+  size: number
+  truncated: boolean
+  metadata: Record<string, unknown> | null
+}
+
 export interface TestRun {
   id: number
   module_version_id: number
@@ -75,7 +105,8 @@ export interface TestRun {
   status: TestStatus
   stdout: string | null
   stderr: string | null
-  metadata_output: unknown
+  metadata_output: MetadataOutput | null
+  subcontent_output: SubcontentItem[] | null
   error_message: string | null
   started_at: string | null
   completed_at: string | null

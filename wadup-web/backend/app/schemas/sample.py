@@ -32,6 +32,7 @@ class TestRunResponse(BaseModel):
     stdout: Optional[str] = None
     stderr: Optional[str] = None
     metadata_output: Optional[Any] = None
+    subcontent_output: Optional[Any] = None
     error_message: Optional[str] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None

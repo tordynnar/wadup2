@@ -143,6 +143,41 @@ def run_module(wasm_path: str, sample_path: str, filename: str) -> dict:
                 # If single metadata object, return it directly; otherwise return list
                 metadata = all_metadata[0] if len(all_metadata) == 1 else all_metadata
 
+        # Read subcontent files from /subcontent/
+        subcontent = []
+        subcontent_data_files = sorted(subcontent_dir.glob("data_*.bin"))
+        for data_file in subcontent_data_files:
+            # Extract index from filename (data_N.bin)
+            try:
+                idx = int(data_file.stem.split("_")[1])
+            except (IndexError, ValueError):
+                continue
+
+            # Read the binary data (truncate if too large)
+            max_size = 4096  # 4KB max for hex display
+            data = data_file.read_bytes()
+            truncated = len(data) > max_size
+            if truncated:
+                data = data[:max_size]
+
+            # Read corresponding metadata if exists
+            meta_file = subcontent_dir / f"metadata_{idx}.json"
+            sub_metadata = None
+            if meta_file.exists():
+                try:
+                    sub_metadata = json.loads(meta_file.read_text())
+                except json.JSONDecodeError:
+                    pass
+
+            subcontent.append({
+                "index": idx,
+                "filename": sub_metadata.get("filename") if sub_metadata else None,
+                "data_hex": data.hex(),
+                "size": len(data_file.read_bytes()),
+                "truncated": truncated,
+                "metadata": sub_metadata,
+            })
+
         return {
             "success": exit_code == 0 and error is None,
             "error": error,
@@ -150,6 +185,7 @@ def run_module(wasm_path: str, sample_path: str, filename: str) -> dict:
             "stderr": stderr,
             "exit_code": exit_code,
             "metadata": metadata,
+            "subcontent": subcontent if subcontent else None,
         }
 
 
