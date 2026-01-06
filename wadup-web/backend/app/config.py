@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     go_build_image: str = "wadup-build-go:latest"
     python_build_image: str = "wadup-build-python:latest"
 
+    # Test runner image
+    test_runner_image: str = "wadup-test-runner:latest"
+
     class Config:
         env_prefix = "WADUP_"
         env_file = ".env"

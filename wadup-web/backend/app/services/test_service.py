@@ -1,12 +1,12 @@
 """Test service for running module tests in Docker containers."""
 import asyncio
 import json
-import subprocess
 import threading
 from datetime import datetime
 from pathlib import Path
 from typing import AsyncGenerator
 import docker
+from docker.errors import ContainerError, ImageNotFound
 
 from app.config import settings
 from app.models.sample import TestRun, TestStatus
@@ -14,7 +14,7 @@ from app.database import SessionLocal
 
 
 class TestService:
-    """Service for running module tests."""
+    """Service for running module tests in Docker containers."""
 
     # Store for active test output (run_id -> list of output lines)
     _test_output: dict[int, list[str]] = {}
@@ -39,7 +39,7 @@ class TestService:
         thread.start()
 
     def _run_test(self, run_id: int) -> None:
-        """Run the test in a Docker container using wadup CLI."""
+        """Run the test in a Docker container."""
         db = SessionLocal()
         try:
             test_run = db.query(TestRun).filter(TestRun.id == run_id).first()
@@ -61,54 +61,83 @@ class TestService:
 
             self._add_output(run_id, f"Testing with sample: {sample.filename}")
             self._add_output(run_id, f"WASM module: {wasm_path.name}")
+            self._add_output(run_id, f"Running in Docker container...")
 
             try:
-                # Run wadup test command
-                # Note: This assumes wadup CLI has a 'test' command that outputs JSON
-                # This will need to be implemented in the wadup CLI
-                result = subprocess.run(
-                    [
-                        "wadup",
-                        "test",
-                        "--wasm", str(wasm_path),
-                        "--input", str(sample_path),
-                        "--output", "json",
+                # Run the test in Docker container
+                # Mount the wasm file and sample file directly
+                container = self.docker_client.containers.run(
+                    settings.test_runner_image,
+                    command=[
+                        "--module", "/test/module.wasm",
+                        "--sample", "/test/sample.bin",
+                        "--filename", sample.filename,
                     ],
-                    capture_output=True,
-                    text=True,
-                    timeout=settings.test_timeout,
+                    detach=True,
+                    volumes={
+                        str(wasm_path): {"bind": "/test/module.wasm", "mode": "ro"},
+                        str(sample_path): {"bind": "/test/sample.bin", "mode": "ro"},
+                    },
+                    remove=False,
+                    mem_limit="512m",
+                    cpu_period=100000,
+                    cpu_quota=100000,  # 1 CPU
                 )
 
-                # Parse output
-                if result.returncode == 0:
-                    try:
-                        output = json.loads(result.stdout)
-                        test_run.metadata_output = output.get("tables", [])
+                # Wait for container to complete
+                result = container.wait(timeout=settings.test_timeout)
+                exit_code = result.get("StatusCode", 1)
+
+                # Get container logs (stdout contains the JSON result)
+                logs = container.logs(stdout=True, stderr=True).decode("utf-8", errors="replace")
+
+                # Remove container
+                container.remove()
+
+                # Parse the JSON output
+                try:
+                    output = json.loads(logs)
+
+                    if output.get("success", False):
+                        test_run.status = TestStatus.SUCCESS
                         test_run.stdout = output.get("stdout", "")
                         test_run.stderr = output.get("stderr", "")
-                        test_run.status = TestStatus.SUCCESS
+                        test_run.metadata_output = output.get("metadata")
                         self._add_output(run_id, "Test completed successfully!")
-                    except json.JSONDecodeError:
-                        test_run.stdout = result.stdout
-                        test_run.stderr = result.stderr
-                        test_run.status = TestStatus.SUCCESS
-                        self._add_output(run_id, "Test completed (output not JSON)")
-                else:
-                    test_run.status = TestStatus.FAILED
-                    test_run.error_message = result.stderr or f"Exit code: {result.returncode}"
-                    test_run.stdout = result.stdout
-                    test_run.stderr = result.stderr
-                    self._add_output(run_id, f"Test failed: {test_run.error_message}")
 
-            except subprocess.TimeoutExpired:
+                        if test_run.stdout:
+                            self._add_output(run_id, f"stdout: {test_run.stdout[:200]}")
+                        if test_run.metadata_output:
+                            self._add_output(run_id, f"Metadata: {json.dumps(test_run.metadata_output)[:200]}")
+                    else:
+                        test_run.status = TestStatus.FAILED
+                        test_run.error_message = output.get("error", f"Exit code: {output.get('exit_code', exit_code)}")
+                        test_run.stdout = output.get("stdout", "")
+                        test_run.stderr = output.get("stderr", "")
+                        self._add_output(run_id, f"Test failed: {test_run.error_message}")
+                        if test_run.stderr:
+                            self._add_output(run_id, f"stderr: {test_run.stderr[:500]}")
+
+                except json.JSONDecodeError:
+                    # Output wasn't JSON, treat as raw output
+                    if exit_code == 0:
+                        test_run.status = TestStatus.SUCCESS
+                        test_run.stdout = logs
+                        self._add_output(run_id, "Test completed (non-JSON output)")
+                    else:
+                        test_run.status = TestStatus.FAILED
+                        test_run.error_message = f"Exit code: {exit_code}"
+                        test_run.stderr = logs
+                        self._add_output(run_id, f"Test failed: {test_run.error_message}")
+
+            except ImageNotFound:
                 test_run.status = TestStatus.FAILED
-                test_run.error_message = f"Test timed out after {settings.test_timeout} seconds"
+                test_run.error_message = f"Test runner image not found: {settings.test_runner_image}. Run: docker build -t wadup-test-runner:latest ./docker/test"
                 self._add_output(run_id, test_run.error_message)
-            except FileNotFoundError:
-                # wadup CLI not installed - provide helpful message
+            except ContainerError as e:
                 test_run.status = TestStatus.FAILED
-                test_run.error_message = "wadup CLI not found. Please ensure wadup is installed and in PATH."
-                self._add_output(run_id, test_run.error_message)
+                test_run.error_message = f"Container error: {e}"
+                self._add_output(run_id, f"ERROR: {e}")
             except Exception as e:
                 test_run.status = TestStatus.FAILED
                 test_run.error_message = str(e)
