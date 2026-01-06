@@ -1,9 +1,7 @@
 # WADUP Go Build Image
-# Builds Go modules to WebAssembly using TinyGo
+# Builds Go modules to WebAssembly using standard Go
 
-FROM tinygo/tinygo:0.34.0
-
-USER root
+FROM golang:1.24-bookworm
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

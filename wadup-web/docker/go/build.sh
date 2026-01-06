@@ -1,5 +1,6 @@
 #!/bin/bash
 # WADUP Go Module Build Script
+# Uses standard Go with wasip1 target
 set -e
 
 echo "=== WADUP Go Build ==="
@@ -15,9 +16,9 @@ fi
 echo "Downloading dependencies..."
 go mod download || true
 
-# Build for wasip1 using TinyGo
-echo "Compiling to wasip1 with TinyGo..."
-tinygo build -o /build/output/module.wasm -target=wasip1 -no-debug .
+# Build for wasip1 using standard Go
+echo "Compiling to wasip1 with Go..."
+GOOS=wasip1 GOARCH=wasm go build -o /build/output/module.wasm .
 
 # Show file size
 if [ -f "/build/output/module.wasm" ]; then

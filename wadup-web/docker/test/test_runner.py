@@ -94,11 +94,51 @@ def run_module(wasm_path: str, sample_path: str, filename: str) -> dict:
                 "metadata": None,
             }
 
-        # Find and call the process function
-        process_func = instance.exports(store).get("process")
+        # For TinyGo/Go modules, we need to initialize the runtime
+        # before calling custom wasmexport functions
+        exports = instance.exports(store)
+
+        # Check if this is a TinyGo module with custom exports
+        process_func = exports.get("process")
+
+        # Try _initialize first (reactor mode - TinyGo with -buildmode=c-shared)
+        initialize_func = exports.get("_initialize")
+        if initialize_func is not None:
+            try:
+                initialize_func(store)
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"Runtime initialization (_initialize) failed: {e}",
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": -1,
+                    "metadata": None,
+                }
+
+        # Try _start if no _initialize (command mode)
+        start_func = exports.get("_start")
+        if initialize_func is None and process_func is not None and start_func is not None:
+            try:
+                start_func(store)
+            except wasmtime.ExitTrap as e:
+                # _start exits with code 0 after initialization
+                if e.code != 0:
+                    return {
+                        "success": False,
+                        "error": f"Runtime initialization (_start) failed with exit code {e.code}",
+                        "stdout": "",
+                        "stderr": "",
+                        "exit_code": e.code,
+                        "metadata": None,
+                    }
+            except Exception as e:
+                # Some initialization errors are OK
+                pass
+
+        # If no process function, try _start (for pure WASI modules)
         if process_func is None:
-            # Try _start for WASI modules
-            process_func = instance.exports(store).get("_start")
+            process_func = exports.get("_start")
 
         if process_func is None:
             return {

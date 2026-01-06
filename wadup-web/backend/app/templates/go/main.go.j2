@@ -42,7 +42,9 @@ func process() int32 {
 	}
 
 	// Flush metadata to output
-	wadup.Flush()
+	if err = wadup.Flush(); err != nil {
+		return 1
+	}
 	return 0
 }
 

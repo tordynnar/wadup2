@@ -15,33 +15,8 @@ fi
 MODULE_NAME=$(grep -E '^name\s*=' pyproject.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/' | tr '-' '_')
 echo "Module name: $MODULE_NAME"
 
-# Find the main Python file
-if [ -f "${MODULE_NAME}/__init__.py" ]; then
-    MAIN_FILE="${MODULE_NAME}/__init__.py"
-elif [ -f "${MODULE_NAME}.py" ]; then
-    MAIN_FILE="${MODULE_NAME}.py"
-elif [ -f "__init__.py" ]; then
-    MAIN_FILE="__init__.py"
-else
-    echo "ERROR: Could not find main Python file"
-    echo "Expected: ${MODULE_NAME}/__init__.py, ${MODULE_NAME}.py, or __init__.py"
-    exit 1
-fi
-
-echo "Main file: $MAIN_FILE"
-
-# Create a WIT file for the component interface
-cat > /tmp/wadup-module.wit << 'EOF'
-package wadup:module;
-
-world module {
-    export process: func() -> s32;
-}
-EOF
-
-# Build using componentize-py
-echo "Componentizing Python module..."
-componentize-py -d /tmp/wadup-module.wit -w module componentize "$MODULE_NAME" -o /build/output/module.wasm
+# Run the Python build script
+python3 /usr/local/bin/build_module.py /build/src
 
 # Show file size
 if [ -f "/build/output/module.wasm" ]; then
