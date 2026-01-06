@@ -1,0 +1,144 @@
+.samples-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  overflow: hidden;
+}
+
+.samples-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.samples-header h2 {
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.samples-subtitle {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.samples-error {
+  background: rgba(237, 135, 150, 0.1);
+  color: var(--error);
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.samples-drop-zone {
+  flex: 1;
+  position: relative;
+  background: var(--bg-secondary);
+  border: 2px dashed var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.samples-drop-zone.dragging {
+  border-color: var(--accent);
+  background: rgba(198, 160, 246, 0.05);
+}
+
+.samples-loading,
+.samples-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 16px;
+  color: var(--text-muted);
+}
+
+.samples-empty svg {
+  opacity: 0.5;
+}
+
+.samples-empty h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.samples-stats {
+  display: flex;
+  gap: 16px;
+  padding: 12px 16px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.samples-list {
+  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+  overflow-y: auto;
+  max-height: calc(100% - 48px);
+}
+
+.sample-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  transition: all 0.15s ease;
+}
+
+.sample-card:hover {
+  border-color: var(--ctp-surface2);
+}
+
+.sample-card-icon {
+  color: var(--text-muted);
+}
+
+.sample-card-info {
+  flex: 1;
+  overflow: hidden;
+}
+
+.sample-card-name {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sample-card-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: rgba(36, 39, 58, 0.95);
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 500;
+}

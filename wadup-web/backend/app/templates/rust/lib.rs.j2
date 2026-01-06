@@ -1,0 +1,41 @@
+//! {{ module_name }} - WADUP Module
+//!
+//! This module processes files and extracts metadata.
+
+use wadup_guest::*;
+
+#[no_mangle]
+pub extern "C" fn process() -> i32 {
+    if let Err(e) = run() {
+        eprintln!("Error: {}", e);
+        return 1;
+    }
+    0
+}
+
+fn run() -> Result<(), String> {
+    // Define your metadata table(s)
+    let table = TableBuilder::new("{{ module_name_snake }}_output")
+        .column("filename", DataType::String)
+        .column("size_bytes", DataType::Int64)
+        .build()?;
+
+    // Read content from virtual filesystem
+    let path = Content::path();
+    let metadata = std::fs::metadata(&path)
+        .map_err(|e| format!("Failed to get metadata: {}", e))?;
+
+    // Get the filename (from environment or use default)
+    let filename = std::env::var("WADUP_FILENAME").unwrap_or_else(|_| "unknown".to_string());
+
+    // Insert a row with the results
+    table.insert(&[
+        Value::String(filename),
+        Value::Int64(metadata.len() as i64),
+    ])?;
+
+    // Flush metadata to output
+    flush()?;
+
+    Ok(())
+}

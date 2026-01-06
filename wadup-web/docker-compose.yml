@@ -1,0 +1,46 @@
+version: "3.8"
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./storage:/app/storage
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WADUP_DATABASE_URL=sqlite:///./storage/wadup.db
+      - WADUP_STORAGE_ROOT=/app/storage
+      - WADUP_DEBUG=false
+    depends_on:
+      - build-rust
+      - build-go
+      - build-python
+
+  # Pre-built build containers
+  # These are built once and used by the web app
+  build-rust:
+    build:
+      context: .
+      dockerfile: Dockerfile.build-rust
+    image: wadup-build-rust:latest
+    command: ["echo", "Image built successfully"]
+
+  build-go:
+    build:
+      context: .
+      dockerfile: Dockerfile.build-go
+    image: wadup-build-go:latest
+    command: ["echo", "Image built successfully"]
+
+  build-python:
+    build:
+      context: .
+      dockerfile: Dockerfile.build-python
+    image: wadup-build-python:latest
+    command: ["echo", "Image built successfully"]
+
+volumes:
+  storage:

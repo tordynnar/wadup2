@@ -1,0 +1,49 @@
+// {{ module_name }} - WADUP Module
+//
+// This module processes files and extracts metadata.
+package main
+
+import (
+	"os"
+
+	wadup "github.com/user/wadup-guest-go"
+)
+
+//go:wasmexport process
+func process() int32 {
+	// Define your metadata table(s)
+	table, err := wadup.NewTableBuilder("{{ module_name_snake }}_output").
+		Column("filename", wadup.String).
+		Column("size_bytes", wadup.Int64).
+		Build()
+	if err != nil {
+		return 1
+	}
+
+	// Get file info
+	info, err := os.Stat("/data.bin")
+	if err != nil {
+		return 1
+	}
+
+	// Get filename from environment
+	filename := os.Getenv("WADUP_FILENAME")
+	if filename == "" {
+		filename = "unknown"
+	}
+
+	// Insert a row with the results
+	err = table.InsertRow([]wadup.Value{
+		wadup.NewString(filename),
+		wadup.NewInt64(info.Size()),
+	})
+	if err != nil {
+		return 1
+	}
+
+	// Flush metadata to output
+	wadup.Flush()
+	return 0
+}
+
+func main() {}

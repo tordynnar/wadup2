@@ -1,0 +1,27 @@
+"""{{ module_name }} - WADUP Module
+
+This module processes files and extracts metadata.
+"""
+import os
+import wadup
+
+
+def main():
+    """Entry point called by WADUP for each file."""
+    # Define your metadata table(s)
+    wadup.define_table("{{ module_name_snake }}_output", [
+        ("filename", "String"),
+        ("size_bytes", "Int64"),
+    ])
+
+    # Get file info
+    size = os.path.getsize("/data.bin")
+
+    # Get filename from environment
+    filename = os.environ.get("WADUP_FILENAME", "unknown")
+
+    # Insert a row with the results
+    wadup.insert_row("{{ module_name_snake }}_output", [filename, size])
+
+    # Flush metadata to output
+    wadup.flush()

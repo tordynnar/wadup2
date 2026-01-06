@@ -53,6 +53,9 @@ official/
 # Claude
 .claude
 
+# Playwright
+.playwright-mcp/
+
 # Python
 __pycache__/
 *.pyc
