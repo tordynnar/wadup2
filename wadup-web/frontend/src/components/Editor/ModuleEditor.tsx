@@ -201,8 +201,8 @@ export default function ModuleEditor() {
         currentModule.draft_version.built_at &&
         new Date(currentModule.draft_version.built_at) > new Date(currentModule.published_at)))
 
-  // Can publish if there's a successful build that hasn't been published yet
-  const canPublish = hasUnpublishedBuild
+  // Can publish if there's a successful build that hasn't been published yet, and no unbuilt changes
+  const canPublish = hasUnpublishedBuild && !hasUnbuiltChanges
 
   // File operation handlers
   const handleRename = (path: string) => {
@@ -311,7 +311,7 @@ export default function ModuleEditor() {
             {hasUnbuiltChanges && viewingVersion === 'draft' && (
               <span className="badge badge-warning">Unbuilt Changes</span>
             )}
-            {hasUnpublishedBuild && viewingVersion === 'draft' && (
+            {hasUnpublishedBuild && !hasUnbuiltChanges && viewingVersion === 'draft' && (
               <span className="badge badge-accent">Unpublished Build</span>
             )}
           </div>
