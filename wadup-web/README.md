@@ -8,9 +8,11 @@ WADUP Web provides a browser-based IDE for creating WebAssembly modules that ext
 
 - **Monaco Editor** with syntax highlighting (Catppuccin Macchiato theme)
 - **Multi-language support**: Rust, Go, and Python modules
-- **Docker-based builds**: Compile modules to WebAssembly in isolated containers
+- **File management**: Tree view with drag-and-drop, rename, create, delete
+- **Tabbed editing**: Multiple open files with unsaved changes tracking
+- **Docker-based builds**: Compile modules to WebAssembly with real-time log streaming
 - **Test samples**: Upload files to test modules against
-- **Module publishing**: Share modules with other users
+- **Module publishing**: Draft/published version management, share modules with other users
 
 ## Architecture
 
@@ -20,20 +22,25 @@ wadup-web/
 │   ├── app/
 │   │   ├── models/    # SQLAlchemy ORM models
 │   │   ├── routers/   # API endpoints
+│   │   ├── schemas/   # Pydantic schemas
 │   │   ├── services/  # Business logic (build, test)
 │   │   └── templates/ # Module templates (Rust, Go, Python)
+│   ├── alembic/       # Database migrations
 │   └── requirements.txt
 ├── frontend/          # React + TypeScript + Vite
 │   ├── src/
 │   │   ├── api/       # API client functions
 │   │   ├── components/# React components
 │   │   ├── stores/    # Zustand state management
+│   │   ├── styles/    # Global styles (Catppuccin theme)
 │   │   └── types/     # TypeScript type definitions
 │   └── package.json
-├── docker/            # Docker build images
+├── docker/            # Docker build/test images
 │   ├── rust/          # Rust → wasm32-wasip1
 │   ├── go/            # Go → TinyGo wasip1
-│   └── python/        # Python → componentize-py
+│   ├── python/        # Python → componentize-py
+│   └── test/          # WADUP test runner
+├── scripts/           # Build helper scripts
 └── storage/           # Runtime data (gitignored)
     ├── modules/       # Module source files
     ├── artifacts/     # Built WASM files
@@ -56,10 +63,11 @@ chmod +x build-images.sh
 ./build-images.sh
 ```
 
-This creates three images:
+This creates four images:
 - `wadup-build-rust:latest` - Rust compiler with wasm32-wasip1 target
 - `wadup-build-go:latest` - TinyGo compiler for wasip1
 - `wadup-build-python:latest` - componentize-py for Python WASM
+- `wadup-test-runner:latest` - WADUP runtime for testing modules
 
 ### 2. Start Backend
 
@@ -92,19 +100,19 @@ Navigate to http://localhost:5173 in your browser.
 - `GET /api/auth/me` - Get current user
 
 ### Modules
-- `GET /api/modules` - List modules (supports filtering)
+- `GET /api/modules` - List modules (supports filtering, pagination)
 - `POST /api/modules` - Create new module
 - `GET /api/modules/{id}` - Get module details
-- `PUT /api/modules/{id}` - Update module metadata
 - `DELETE /api/modules/{id}` - Delete module
 - `POST /api/modules/{id}/publish` - Publish module
 
 ### Files
-- `GET /api/modules/{id}/files` - List module files
+- `GET /api/modules/{id}/files` - List module files as tree
 - `GET /api/modules/{id}/files/{path}` - Get file content
-- `PUT /api/modules/{id}/files/{path}` - Update file content
-- `POST /api/modules/{id}/files/{path}` - Create new file
+- `PUT /api/modules/{id}/files/{path}` - Create or update file
 - `DELETE /api/modules/{id}/files/{path}` - Delete file
+- `POST /api/modules/{id}/files/folders/{path}` - Create folder
+- `POST /api/modules/{id}/files/{path}/rename` - Rename file or folder
 
 ### Build
 - `POST /api/modules/{id}/build` - Start build
@@ -117,7 +125,9 @@ Navigate to http://localhost:5173 in your browser.
 - `DELETE /api/samples/{id}` - Delete sample
 
 ### Test
-- `POST /api/modules/{id}/test` - Run module against samples
+- `POST /api/modules/{id}/test` - Start test run with samples
+- `GET /api/modules/{id}/test/{run_id}` - Get test run status and results
+- `GET /api/modules/{id}/test/{run_id}/stream` - Stream test output (SSE)
 
 ## Module Development
 
@@ -128,22 +138,29 @@ use wadup_guest::*;
 
 #[no_mangle]
 pub extern "C" fn process() -> i32 {
+    if let Err(_) = run() { return 1; }
+    0
+}
+
+fn run() -> Result<(), String> {
     let table = TableBuilder::new("my_output")
         .column("filename", DataType::String)
-        .column("size", DataType::Int64)
-        .build().unwrap();
+        .column("size_bytes", DataType::Int64)
+        .build()?;
 
     let path = Content::path();
-    let metadata = std::fs::metadata(&path).unwrap();
-    let filename = std::env::var("WADUP_FILENAME").unwrap_or_default();
+    let metadata = std::fs::metadata(&path)
+        .map_err(|e| e.to_string())?;
+    let filename = std::env::var("WADUP_FILENAME")
+        .unwrap_or_else(|_| "unknown".to_string());
 
-    table.insert_row(vec![
+    table.insert(&[
         Value::String(filename),
         Value::Int64(metadata.len() as i64),
-    ]).unwrap();
+    ])?;
 
-    Metadata::flush();
-    0
+    flush()?;
+    Ok(())
 }
 ```
 
@@ -159,13 +176,17 @@ import (
 
 //go:wasmexport process
 func process() int32 {
-    table, _ := wadup.NewTableBuilder("my_output").
+    table, err := wadup.NewTableBuilder("my_output").
         Column("filename", wadup.String).
-        Column("size", wadup.Int64).
+        Column("size_bytes", wadup.Int64).
         Build()
+    if err != nil { return 1 }
 
-    info, _ := os.Stat("/data.bin")
+    info, err := os.Stat("/data.bin")
+    if err != nil { return 1 }
+
     filename := os.Getenv("WADUP_FILENAME")
+    if filename == "" { filename = "unknown" }
 
     table.InsertRow([]wadup.Value{
         wadup.NewString(filename),
@@ -186,9 +207,10 @@ import os
 import wadup
 
 def main():
+    """Entry point called by WADUP for each file."""
     wadup.define_table("my_output", [
         ("filename", "String"),
-        ("size", "Int64"),
+        ("size_bytes", "Int64"),
     ])
 
     size = os.path.getsize("/data.bin")
@@ -205,12 +227,15 @@ Environment variables (can be set in `.env`):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WADUP_DATABASE_URL` | `sqlite:///storage/wadup.db` | Database connection string |
+| `WADUP_STORAGE_ROOT` | `storage/` | Root storage directory |
 | `WADUP_HOST` | `0.0.0.0` | Backend host |
 | `WADUP_PORT` | `8080` | Backend port |
 | `WADUP_DEBUG` | `false` | Enable debug mode |
+| `WADUP_DOCKER_SOCKET` | `/var/run/docker.sock` | Docker socket path |
 | `WADUP_RUST_BUILD_IMAGE` | `wadup-build-rust:latest` | Rust build image |
 | `WADUP_GO_BUILD_IMAGE` | `wadup-build-go:latest` | Go build image |
 | `WADUP_PYTHON_BUILD_IMAGE` | `wadup-build-python:latest` | Python build image |
+| `WADUP_TEST_RUNNER_IMAGE` | `wadup-test-runner:latest` | Test runner image |
 | `WADUP_BUILD_TIMEOUT` | `600` | Build timeout in seconds |
 | `WADUP_TEST_TIMEOUT` | `300` | Test timeout in seconds |
 
