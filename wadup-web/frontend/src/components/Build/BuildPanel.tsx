@@ -11,18 +11,9 @@ interface BuildPanelProps {
 
 type Status = 'idle' | 'building' | 'success' | 'failed'
 
-// Map module build_status to panel Status
-function getInitialStatus(buildStatus: string | undefined | null): Status {
-  if (buildStatus === 'success' || buildStatus === 'SUCCESS') return 'success'
-  if (buildStatus === 'failed' || buildStatus === 'FAILED') return 'failed'
-  if (buildStatus === 'building' || buildStatus === 'BUILDING') return 'building'
-  return 'idle'
-}
-
 export default function BuildPanel({ moduleId, onClose }: BuildPanelProps) {
-  const { loadModule, currentModule } = useModuleStore()
-  const initialStatus = getInitialStatus(currentModule?.draft_version?.build_status)
-  const [status, setStatus] = useState<Status>(initialStatus)
+  const { loadModule } = useModuleStore()
+  const [status, setStatus] = useState<Status>('idle')
   const [logs, setLogs] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
@@ -123,17 +114,13 @@ export default function BuildPanel({ moduleId, onClose }: BuildPanelProps) {
           </div>
         )}
 
-        {logs.length > 0 ? (
+        {logs.length > 0 && (
           <div className="build-log" ref={logRef}>
             {logs.map((line, i) => (
               <div key={i} className="build-log-line">
                 {line}
               </div>
             ))}
-          </div>
-        ) : (status === 'success' || status === 'failed') && (
-          <div className="build-log-notice">
-            Previous build {status}. Click "Start Build" to rebuild and see logs.
           </div>
         )}
       </div>
