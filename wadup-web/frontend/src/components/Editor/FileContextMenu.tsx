@@ -12,6 +12,7 @@ interface FileContextMenuProps {
   onDelete: (path: string) => void
   onCreateFile: (parentPath: string) => void
   onCreateFolder: (parentPath: string) => void
+  showRenameDelete?: boolean
 }
 
 export default function FileContextMenu({
@@ -24,6 +25,7 @@ export default function FileContextMenu({
   onDelete,
   onCreateFile,
   onCreateFolder,
+  showRenameDelete = true,
 }: FileContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -100,27 +102,31 @@ export default function FileContextMenu({
         <FolderPlus size={14} />
         <span>New Folder</span>
       </button>
-      <div className="context-menu-separator" />
-      <button
-        className="context-menu-item"
-        onClick={() => {
-          onRename(targetPath)
-          onClose()
-        }}
-      >
-        <Pencil size={14} />
-        <span>Rename</span>
-      </button>
-      <button
-        className="context-menu-item context-menu-item-danger"
-        onClick={() => {
-          onDelete(targetPath)
-          onClose()
-        }}
-      >
-        <Trash2 size={14} />
-        <span>Delete</span>
-      </button>
+      {showRenameDelete && (
+        <>
+          <div className="context-menu-separator" />
+          <button
+            className="context-menu-item"
+            onClick={() => {
+              onRename(targetPath)
+              onClose()
+            }}
+          >
+            <Pencil size={14} />
+            <span>Rename</span>
+          </button>
+          <button
+            className="context-menu-item context-menu-item-danger"
+            onClick={() => {
+              onDelete(targetPath)
+              onClose()
+            }}
+          >
+            <Trash2 size={14} />
+            <span>Delete</span>
+          </button>
+        </>
+      )}
     </div>
   )
 }

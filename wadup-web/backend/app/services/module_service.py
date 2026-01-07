@@ -100,11 +100,16 @@ class ModuleService:
 
     def _build_tree(self, path: Path, root: Path) -> FileTreeNode:
         """Build a file tree node recursively."""
+        # Calculate relative path (empty string for root directory)
+        rel_path = str(path.relative_to(root)) if path != root else ""
+        if rel_path == ".":
+            rel_path = ""
+
         if path.is_file():
             return FileTreeNode(
                 name=path.name,
                 type="file",
-                path=str(path.relative_to(root)),
+                path=rel_path,
             )
 
         children = []
@@ -120,6 +125,7 @@ class ModuleService:
         return FileTreeNode(
             name=path.name,
             type="directory",
+            path=rel_path,
             children=children,
         )
 

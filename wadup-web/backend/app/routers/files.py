@@ -86,7 +86,7 @@ def get_file(
 def update_file(
     module_id: int,
     path: str,
-    content: str = Body(..., media_type="text/plain"),
+    content: str = Body("", media_type="text/plain"),
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):

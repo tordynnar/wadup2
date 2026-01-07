@@ -8,6 +8,7 @@ interface ContextMenuState {
   y: number
   path: string
   type: 'file' | 'directory'
+  showRenameDelete: boolean
 }
 
 interface DragState {
@@ -46,7 +47,15 @@ export default function FileTree({
     type: 'file' | 'directory'
   ) => {
     e.preventDefault()
-    setContextMenu({ x: e.clientX, y: e.clientY, path, type })
+    setContextMenu({ x: e.clientX, y: e.clientY, path, type, showRenameDelete: true })
+  }
+
+  const handleEmptySpaceContextMenu = (e: React.MouseEvent) => {
+    // Only trigger if click is directly on the file-tree container (not on children)
+    if (e.target === e.currentTarget) {
+      e.preventDefault()
+      setContextMenu({ x: e.clientX, y: e.clientY, path: '', type: 'directory', showRenameDelete: false })
+    }
   }
 
   const handleDragStart = (e: React.DragEvent, path: string) => {
@@ -161,6 +170,7 @@ export default function FileTree({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onDragOver={(e) => e.preventDefault()}
+      onContextMenu={handleEmptySpaceContextMenu}
     >
       {tree.children?.map((child) => (
         <FileTreeItem
@@ -189,6 +199,7 @@ export default function FileTree({
           onDelete={onDelete}
           onCreateFile={onCreateFile}
           onCreateFolder={onCreateFolder}
+          showRenameDelete={contextMenu.showRenameDelete}
         />
       )}
     </div>
