@@ -25,11 +25,15 @@ wadup2/
 ├── guest/               # Guest libraries for other languages
 │   ├── python/          # Python wadup library
 │   └── go/              # Go wadup library
+├── docker/              # Docker build containers
+│   ├── rust/            # Rust → wasm32-wasip1
+│   ├── go/              # Go → wasip1
+│   ├── python/          # Python → wasm32-wasi (CPython bundled)
+│   └── test/            # WADUP test runner
 ├── examples/            # Example WASM modules (Rust, Python, Go)
 ├── scripts/             # Build and utility scripts
 ├── wadup-web/           # Web IDE for module development
 ├── demo/                # Demo data and modules
-├── deps/                # Build dependencies (WASI SDK, Python, etc.)
 └── docker-compose.yml   # Elasticsearch + Kibana
 ```
 
@@ -42,13 +46,15 @@ wadup2/
 git clone https://github.com/tordynnar/wadup2.git
 cd wadup2
 
-# Build everything (downloads dependencies, builds Python WASI, examples)
-./scripts/build-all.sh
-
-# Or just build the CLI
+# Build the CLI
 cargo build --release
-
 # The binary will be at target/release/wadup
+
+# Build Docker images for module compilation (one-time setup)
+./docker/build-images.sh
+
+# Build all example modules
+./scripts/build-examples.sh
 ```
 
 ### Basic Usage
@@ -637,12 +643,26 @@ All examples use the WASI target (`wasm32-wasip1`) to access the virtual filesys
 
 ### Building Examples
 
-The easiest way to build all examples is:
+All module builds use Docker containers, which include all required toolchains and dependencies.
+
+**Prerequisites:**
+```bash
+# Build Docker images (one-time setup)
+./docker/build-images.sh
+```
+
+This creates four images:
+- `wadup-build-rust:latest` - Rust compiler with wasm32-wasip1 target
+- `wadup-build-go:latest` - Go compiler with WASI support
+- `wadup-build-python:latest` - CPython 3.13 + WASI SDK + pre-built C extensions (lxml, pydantic)
+- `wadup-test-runner:latest` - WADUP runtime for testing modules
+
+**Build all examples:**
 ```bash
 ./scripts/build-examples.sh
 ```
 
-This builds all Rust, Python, and Go examples automatically.
+This builds all Rust, Python, and Go examples automatically using Docker.
 
 **Individual Rust Examples** (byte-counter, zip-extractor, sqlite-parser):
 ```bash
@@ -652,9 +672,9 @@ cargo build --target wasm32-wasip1 --release
 
 See [examples/sqlite-parser/README.md](examples/sqlite-parser/README.md) for detailed documentation.
 
-**Python Modules** (CPython 3.13.7):
+**Python Modules** (CPython 3.13):
 
-Python modules use a standard `pyproject.toml` structure with pure-Python dependencies:
+Python modules use a standard `pyproject.toml` structure:
 
 ```
 examples/python-counter/
@@ -670,7 +690,7 @@ examples/python-counter/
 name = "python-counter"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["chardet", "humanize"]  # pure-Python only
+dependencies = ["chardet", "humanize"]  # pure-Python deps supported
 
 [tool.wadup]
 entry-point = "python_counter"  # module with main() function
@@ -678,34 +698,23 @@ entry-point = "python_counter"  # module with main() function
 
 **Building Python modules:**
 
-First, build the shared Python WASI runtime (one-time, ~5-10 minutes):
+Python modules are built using Docker, which includes all dependencies pre-built:
 ```bash
-./scripts/build-python-wasi.sh
+./scripts/build-examples.sh  # Builds all examples including Python
 ```
 
-Then build individual Python modules using `build-python-project.py`:
-```bash
-./scripts/build-python-project.py examples/python-counter
-./scripts/build-python-project.py examples/python-sqlite-parser
-./scripts/build-python-project.py examples/python-multi-file
-```
-
-The build script:
+The Docker build process:
 1. Parses `pyproject.toml` for dependencies and entry point
-2. Downloads pure-Python dependencies via `pip download --no-binary :all:`
+2. Installs pure-Python dependencies via pip
 3. Bundles project source, dependencies, and `wadup` library into a ZIP
-4. Embeds the ZIP into a C file and compiles with CPython
+4. Pre-compiles all `.py` files to `.pyc` for faster startup
+5. Embeds the ZIP into a C file and compiles with CPython + WASI SDK
 
 **Third-party dependencies:**
-- Pure-Python packages are fully supported
+- Pure-Python packages are fully supported (e.g., `chardet`, `humanize`, `python-slugify`)
 - Transitive dependencies are automatically resolved
+- C extensions: `lxml` and `pydantic` are pre-built in the Docker image
 - Dependencies are bundled into the WASM module
-
-The shared Python WASI build (`deps/wasi-python/`) includes:
-- CPython 3.13.7 compiled for wasm32-wasip1
-- SQLite 3.45.1 for WASI
-- Frozen Python standard library (including logging, importlib, gettext, etc.)
-- Compression libraries (zlib, bz2, lzma)
 
 **Important**: The Python interpreter is initialized once per worker thread and reused across all files. Python global variables persist between files processed by the same thread. The module's `main()` function should be idempotent or explicitly reset state as needed.
 
@@ -736,10 +745,12 @@ See [examples/go-sqlite-parser/README.md](examples/go-sqlite-parser/README.md) f
 - Rust 1.70+
 - wasm32-wasip1 target: `rustup target add wasm32-wasip1`
 
-**Module Development (choose based on your language):**
-- **Rust modules**: wasm32-wasip1 target (already installed above)
-- **Python modules**: WASI SDK (auto-downloaded by build script)
-- **Go modules**: Go 1.21+ (WASI support built-in, no extra tools needed)
+**Module Development:**
+- **Docker**: All module builds use Docker containers
+- Build images once: `./docker/build-images.sh`
+
+Alternatively, for local Rust development without Docker:
+- wasm32-wasip1 target: `rustup target add wasm32-wasip1`
 
 ### Building
 

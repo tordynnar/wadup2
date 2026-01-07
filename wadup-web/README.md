@@ -35,16 +35,17 @@ wadup-web/
 │   │   ├── styles/    # Global styles (Catppuccin theme)
 │   │   └── types/     # TypeScript type definitions
 │   └── package.json
-├── docker/            # Docker build/test images
-│   ├── rust/          # Rust → wasm32-wasip1
-│   ├── go/            # Go → TinyGo wasip1
-│   ├── python/        # Python → componentize-py
-│   └── test/          # WADUP test runner
-├── scripts/           # Build helper scripts
 └── storage/           # Runtime data (gitignored)
     ├── modules/       # Module source files
     ├── artifacts/     # Built WASM files
     └── samples/       # Uploaded test samples
+
+# Docker build images are at the project root:
+../docker/
+├── rust/              # Rust → wasm32-wasip1
+├── go/                # Go → wasip1
+├── python/            # Python → wasm32-wasi (CPython bundled)
+└── test/              # WADUP test runner
 ```
 
 ## Prerequisites
@@ -57,16 +58,17 @@ wadup-web/
 
 ### 1. Build Docker Images
 
+From the **project root** (not wadup-web/):
+
 ```bash
-cd docker
-chmod +x build-images.sh
-./build-images.sh
+cd /path/to/wadup2
+./docker/build-images.sh
 ```
 
 This creates four images:
 - `wadup-build-rust:latest` - Rust compiler with wasm32-wasip1 target
-- `wadup-build-go:latest` - TinyGo compiler for wasip1
-- `wadup-build-python:latest` - componentize-py for Python WASM
+- `wadup-build-go:latest` - Go compiler with WASI support
+- `wadup-build-python:latest` - CPython 3.13 + WASI SDK + pre-built C extensions
 - `wadup-test-runner:latest` - WADUP runtime for testing modules
 
 ### 2. Start Backend
@@ -260,7 +262,7 @@ uvicorn app.main:app --reload  # Auto-reload on changes
 
 ### Adding a New Language
 
-1. Create a new directory in `docker/` with:
+1. Create a new directory in the project root `docker/` with:
    - `Dockerfile` - Build environment with WASM toolchain
    - `build.sh` - Script to compile source to `module.wasm`
    - Guest library with WADUP API bindings
@@ -270,6 +272,8 @@ uvicorn app.main:app --reload  # Auto-reload on changes
 3. Update `Language` enum in `backend/app/models/module.py`
 
 4. Add image name to `backend/app/config.py`
+
+5. Update `docker/build-images.sh` to build the new image
 
 ## License
 
