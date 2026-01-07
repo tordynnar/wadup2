@@ -39,7 +39,8 @@ class Module(Base):
     language = Column(Enum(Language), nullable=False)
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    # Note: updated_at is set explicitly when files change, not on every model update
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Publishing status
     is_published = Column(Boolean, default=False, nullable=False)

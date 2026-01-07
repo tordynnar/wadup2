@@ -126,6 +126,12 @@ def delete_file(
     except PermissionError:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # Update module timestamp
+    from datetime import datetime
+
+    module.updated_at = datetime.utcnow()
+    db.commit()
+
     return {"message": "File deleted"}
 
 
