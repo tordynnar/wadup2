@@ -184,6 +184,35 @@ def main() -> int:
             print_error(f"Source directory not found: {source_dir}")
             return 1
 
+        # Install pure Python dependencies if any
+        if dependencies:
+            print_info(f"Installing dependencies: {dependencies}")
+            deps_dir = build_dir / "pip_deps"
+            deps_dir.mkdir()
+            pip_cmd = [
+                sys.executable, "-m", "pip", "install",
+                "--target", str(deps_dir),
+                "--quiet",
+                *dependencies
+            ]
+            result = subprocess.run(pip_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                print_error(f"Failed to install dependencies: {result.stderr}")
+                return 1
+
+            # Bundle installed packages (skip metadata directories)
+            for item in deps_dir.iterdir():
+                if item.is_dir() and not item.name.endswith('.dist-info') and not item.name.endswith('.egg-info'):
+                    dest = bundle_dir / item.name
+                    if not dest.exists():
+                        print_info(f"Bundling dependency: {item.name}")
+                        shutil.copytree(item, dest)
+                elif item.is_file() and item.suffix == '.py':
+                    dest = bundle_dir / item.name
+                    if not dest.exists():
+                        print_info(f"Bundling dependency file: {item.name}")
+                        shutil.copy(item, dest)
+
         # Bundle C extension Python files (lxml + pydantic always included)
         ext_python_dirs = get_all_python_dirs()
         for ext_python_dir in ext_python_dirs:

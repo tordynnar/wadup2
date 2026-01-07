@@ -1,0 +1,38 @@
+# Build artifacts
+target/
+**/target/
+*.wasm
+
+# Dependencies built locally (not needed with Docker containers)
+deps/
+
+# Git
+.git/
+.gitignore
+
+# Node.js
+**/node_modules/
+
+# Python
+**/__pycache__/
+**/.venv/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test fixtures and samples (not needed for image builds)
+tests/
+wadup-web/storage/
+
+# Documentation
+*.md
+!docker/**/README.md
+
+# Misc
+.DS_Store
+*.log

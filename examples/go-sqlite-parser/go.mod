@@ -1,6 +1,6 @@
 module go-sqlite-parser
 
-go 1.25.1
+go 1.24
 
 require (
 	github.com/ncruces/go-sqlite3 v0.13.0

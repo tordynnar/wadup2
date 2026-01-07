@@ -36,13 +36,14 @@ RUN useradd -m -s /bin/bash builder
 RUN mkdir -p /wadup/crates/wadup-guest && chown -R builder:builder /wadup
 
 # Copy wadup-guest crate (needed as a dependency)
-COPY --chown=builder:builder wadup-guest /wadup/crates/wadup-guest
+# Built with: docker build -f docker/rust/Dockerfile .
+COPY --chown=builder:builder crates/wadup-guest /wadup/crates/wadup-guest
 
 # Create build directories
 RUN mkdir -p /build/src /build/output && chown -R builder:builder /build
 
 # Copy build script
-COPY --chown=builder:builder build.sh /usr/local/bin/build.sh
+COPY --chown=builder:builder docker/rust/build.sh /usr/local/bin/build.sh
 RUN chmod +x /usr/local/bin/build.sh
 
 # Set up cargo cache directory

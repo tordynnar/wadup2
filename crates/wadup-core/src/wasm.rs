@@ -893,16 +893,19 @@ impl ModuleInstance {
 
         // Add compiler runtime intrinsics (env namespace)
         // These are soft-float functions needed by some WASM modules (e.g., SQLite)
+        // WASI SDK uses outptr calling convention for 128-bit returns: (outptr: i32, value: i64) -> ()
 
-        // __floatunditf - Convert unsigned 64-bit int to 128-bit float (returns as two i64)
-        // Since WASM doesn't have native f128, this is passed as two i64 (low, high parts)
+        // __floatunditf - Convert unsigned 64-bit int to 128-bit float
+        // Uses outptr convention: writes 128-bit result (as two i64s) to memory at outptr
         linker.func_wrap(
             "env",
             "__floatunditf",
-            |_caller: Caller<StoreData>, _value: i64| -> (i64, i64) {
-                // SQLite doesn't actually need precise f128 math - return approximate conversion
-                // This is a stub that provides reasonable behavior for SQLite's needs
-                (0i64, 0i64)
+            |mut caller: Caller<StoreData>, outptr: i32, _value: i64| {
+                // SQLite doesn't actually need precise f128 math - write zeros as stub
+                let memory = caller.get_export("memory").and_then(|e| e.into_memory());
+                if let Some(mem) = memory {
+                    let _ = mem.write(&mut caller, outptr as usize, &[0u8; 16]);
+                }
             },
         )?;
 
@@ -910,8 +913,11 @@ impl ModuleInstance {
         linker.func_wrap(
             "env",
             "__floatditf",
-            |_caller: Caller<StoreData>, _value: i64| -> (i64, i64) {
-                (0i64, 0i64)
+            |mut caller: Caller<StoreData>, outptr: i32, _value: i64| {
+                let memory = caller.get_export("memory").and_then(|e| e.into_memory());
+                if let Some(mem) = memory {
+                    let _ = mem.write(&mut caller, outptr as usize, &[0u8; 16]);
+                }
             },
         )?;
 

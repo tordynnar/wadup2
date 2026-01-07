@@ -15,13 +15,14 @@ RUN useradd -m -s /bin/bash builder
 RUN mkdir -p /wadup/guest/go && chown -R builder:builder /wadup
 
 # Copy Go guest library
-COPY --chown=builder:builder wadup-guest-go /wadup/guest/go
+# Built with: docker build -f docker/go/Dockerfile .
+COPY --chown=builder:builder guest/go /wadup/guest/go
 
 # Create build directories
 RUN mkdir -p /build/src /build/output && chown -R builder:builder /build
 
 # Copy build script
-COPY --chown=builder:builder build.sh /usr/local/bin/build.sh
+COPY --chown=builder:builder docker/go/build.sh /usr/local/bin/build.sh
 RUN chmod +x /usr/local/bin/build.sh
 
 # Set up Go cache directory

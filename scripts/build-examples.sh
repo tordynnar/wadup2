@@ -1,42 +1,19 @@
 #!/usr/bin/env bash
-# Build all example WASM modules for WADUP integration tests
+# Build all example WASM modules for WADUP integration tests using Docker containers
 #
 # Usage: ./scripts/build-examples.sh [--force]
 #
 # Options:
 #   --force    Rebuild all modules even if they already exist
+#
+# Prerequisites:
+#   - Docker must be running
+#   - Docker images must be built: ./docker/build-images.sh
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WADUP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DEPS_DIR="$WADUP_ROOT/deps"
-
-# Detect platform and set WASI SDK path
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m)
-
-if [ "$OS" = "darwin" ]; then
-    WASI_SDK_OS="macos"
-elif [ "$OS" = "linux" ]; then
-    WASI_SDK_OS="linux"
-else
-    echo "ERROR: Unsupported OS: $OS"
-    exit 1
-fi
-
-WASI_SDK_VERSION="24.0"
-WASI_SDK_PATH="$DEPS_DIR/wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-${WASI_SDK_OS}"
-
-# Export for cargo builds
-export WASI_SDK_PATH
-
-# Check WASI SDK exists
-if [ ! -d "$WASI_SDK_PATH" ]; then
-    echo "ERROR: WASI SDK not found at $WASI_SDK_PATH"
-    echo "Run ./scripts/download-deps.sh first"
-    exit 1
-fi
 
 # Colors
 RED='\033[0;31m'
@@ -86,10 +63,41 @@ record_timing() {
     echo "$name|$duration" >> "$TIMING_FILE"
 }
 
+# Check Docker is available and images exist
+check_docker() {
+    if ! command -v docker &> /dev/null; then
+        echo -e "${RED}ERROR: Docker not found${NC}"
+        echo "Please install Docker to build WADUP modules"
+        exit 1
+    fi
+
+    if ! docker info &> /dev/null; then
+        echo -e "${RED}ERROR: Docker is not running${NC}"
+        echo "Please start Docker and try again"
+        exit 1
+    fi
+
+    # Check for required images
+    local missing_images=()
+    for image in wadup-build-rust:latest wadup-build-go:latest wadup-build-python:latest; do
+        if ! docker image inspect "$image" &> /dev/null; then
+            missing_images+=("$image")
+        fi
+    done
+
+    if [[ ${#missing_images[@]} -gt 0 ]]; then
+        echo -e "${YELLOW}WARNING: Missing Docker images: ${missing_images[*]}${NC}"
+        echo "Building Docker images..."
+        "$WADUP_ROOT/docker/build-images.sh"
+    fi
+}
+
 build_rust_module() {
     local name="$1"
-    local target="wasm32-wasip1"
-    local wasm_file="$WADUP_ROOT/examples/$name/target/$target/release/${name//-/_}.wasm"
+    local src_dir="$WADUP_ROOT/examples/$name"
+    local target_dir="$src_dir/target/wasm32-wasip1/release"
+    local module_name="${name//-/_}"
+    local wasm_file="$target_dir/${module_name}.wasm"
 
     if [[ "$FORCE" == "false" && -f "$wasm_file" ]]; then
         print_info "Skipping $name (already built)"
@@ -99,11 +107,19 @@ build_rust_module() {
 
     local start=$(python3 -c "import time; print(time.time())")
 
-    cargo build \
-        --manifest-path "$WADUP_ROOT/examples/$name/Cargo.toml" \
-        --target "$target" \
-        --release \
-        2>&1
+    # Create output directory
+    mkdir -p "$target_dir"
+
+    # Run Docker build
+    docker run --rm \
+        -v "$src_dir:/build/src:ro" \
+        -v "$target_dir:/build/output:rw" \
+        wadup-build-rust:latest
+
+    # Docker outputs module.wasm, rename to expected name
+    if [[ -f "$target_dir/module.wasm" ]]; then
+        mv "$target_dir/module.wasm" "$wasm_file"
+    fi
 
     local end=$(python3 -c "import time; print(time.time())")
     local duration=$(python3 -c "print(f'{$end - $start:.2f}')")
@@ -121,7 +137,10 @@ build_rust_module() {
 
 build_python_module() {
     local name="$1"
-    local wasm_file="$WADUP_ROOT/examples/$name/target/${name//-/_}.wasm"
+    local src_dir="$WADUP_ROOT/examples/$name"
+    local target_dir="$src_dir/target"
+    local module_name="${name//-/_}"
+    local wasm_file="$target_dir/${module_name}.wasm"
 
     if [[ "$FORCE" == "false" && -f "$wasm_file" ]]; then
         print_info "Skipping $name (already built)"
@@ -131,7 +150,19 @@ build_python_module() {
 
     local start=$(python3 -c "import time; print(time.time())")
 
-    "$WADUP_ROOT/scripts/build-python-project.py" "$WADUP_ROOT/examples/$name" 2>&1
+    # Create output directory
+    mkdir -p "$target_dir"
+
+    # Run Docker build
+    docker run --rm \
+        -v "$src_dir:/build/src:ro" \
+        -v "$target_dir:/build/output:rw" \
+        wadup-build-python:latest
+
+    # Docker outputs module.wasm, rename to expected name
+    if [[ -f "$target_dir/module.wasm" ]]; then
+        mv "$target_dir/module.wasm" "$wasm_file"
+    fi
 
     local end=$(python3 -c "import time; print(time.time())")
     local duration=$(python3 -c "print(f'{$end - $start:.2f}')")
@@ -149,7 +180,10 @@ build_python_module() {
 
 build_go_module() {
     local name="$1"
-    local wasm_file="$WADUP_ROOT/examples/$name/target/${name//-/_}.wasm"
+    local src_dir="$WADUP_ROOT/examples/$name"
+    local target_dir="$src_dir/target"
+    local module_name="${name//-/_}"
+    local wasm_file="$target_dir/${module_name}.wasm"
 
     if [[ "$FORCE" == "false" && -f "$wasm_file" ]]; then
         print_info "Skipping $name (already built)"
@@ -159,12 +193,19 @@ build_go_module() {
 
     local start=$(python3 -c "import time; print(time.time())")
 
-    (
-        cd "$WADUP_ROOT/examples/$name"
-        mkdir -p target
+    # Create output directory
+    mkdir -p "$target_dir"
 
-        GOOS=wasip1 GOARCH=wasm go build -o "target/${name//-/_}.wasm" .
-    ) 2>&1
+    # Run Docker build
+    docker run --rm \
+        -v "$src_dir:/build/src:ro" \
+        -v "$target_dir:/build/output:rw" \
+        wadup-build-go:latest
+
+    # Docker outputs module.wasm, rename to expected name
+    if [[ -f "$target_dir/module.wasm" ]]; then
+        mv "$target_dir/module.wasm" "$wasm_file"
+    fi
 
     local end=$(python3 -c "import time; print(time.time())")
     local duration=$(python3 -c "print(f'{$end - $start:.2f}')")
@@ -210,7 +251,10 @@ print_timing_table() {
 }
 
 # Main build sequence
-print_header "Building WADUP Examples"
+print_header "Building WADUP Examples (Docker)"
+
+# Check Docker is available
+check_docker
 
 echo "Building wadup CLI..."
 CLI_START=$(python3 -c "import time; print(time.time())")

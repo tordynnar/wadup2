@@ -33,32 +33,33 @@ RUN useradd -m -s /bin/bash builder
 RUN mkdir -p /wadup/deps /wadup/guest/python && chown -R builder:builder /wadup
 
 # Copy pre-built WASI libraries (from deps/ directory)
+# Built with: docker build -f docker/python/Dockerfile .
 # These are cross-platform since they're wasm32-wasi object files
-COPY --chown=builder:builder wasi-deps/wasi-python /wadup/deps/wasi-python
-COPY --chown=builder:builder wasi-deps/wasi-zlib /wadup/deps/wasi-zlib
-COPY --chown=builder:builder wasi-deps/wasi-bzip2 /wadup/deps/wasi-bzip2
-COPY --chown=builder:builder wasi-deps/wasi-xz /wadup/deps/wasi-xz
-COPY --chown=builder:builder wasi-deps/wasi-sqlite /wadup/deps/wasi-sqlite
-COPY --chown=builder:builder wasi-deps/wasi-lxml /wadup/deps/wasi-lxml
-COPY --chown=builder:builder wasi-deps/wasi-libxml2 /wadup/deps/wasi-libxml2
-COPY --chown=builder:builder wasi-deps/wasi-libxslt /wadup/deps/wasi-libxslt
-COPY --chown=builder:builder wasi-deps/wasi-pydantic /wadup/deps/wasi-pydantic
+COPY --chown=builder:builder docker/python/wasi-deps/wasi-python /wadup/deps/wasi-python
+COPY --chown=builder:builder docker/python/wasi-deps/wasi-zlib /wadup/deps/wasi-zlib
+COPY --chown=builder:builder docker/python/wasi-deps/wasi-bzip2 /wadup/deps/wasi-bzip2
+COPY --chown=builder:builder docker/python/wasi-deps/wasi-xz /wadup/deps/wasi-xz
+COPY --chown=builder:builder docker/python/wasi-deps/wasi-sqlite /wadup/deps/wasi-sqlite
+COPY --chown=builder:builder docker/python/wasi-deps/wasi-lxml /wadup/deps/wasi-lxml
+COPY --chown=builder:builder docker/python/wasi-deps/wasi-libxml2 /wadup/deps/wasi-libxml2
+COPY --chown=builder:builder docker/python/wasi-deps/wasi-libxslt /wadup/deps/wasi-libxslt
+COPY --chown=builder:builder docker/python/wasi-deps/wasi-pydantic /wadup/deps/wasi-pydantic
 
 # Copy Python guest library
-COPY --chown=builder:builder wadup-guest-python /wadup/guest/python
+COPY --chown=builder:builder guest/python /wadup/guest/python
 
 # Copy WASI stubs
-COPY --chown=builder:builder wasi-stubs /wadup/wasi-stubs
+COPY --chown=builder:builder docker/python/wasi-stubs /wadup/wasi-stubs
 
 # Copy extensions registry
-COPY --chown=builder:builder extensions /wadup/extensions
+COPY --chown=builder:builder docker/python/extensions /wadup/extensions
 
 # Create build directories
 RUN mkdir -p /build/src /build/output && chown -R builder:builder /build
 
 # Copy build script
-COPY --chown=builder:builder build.sh /usr/local/bin/build.sh
-COPY --chown=builder:builder build_module.py /usr/local/bin/build_module.py
+COPY --chown=builder:builder docker/python/build.sh /usr/local/bin/build.sh
+COPY --chown=builder:builder docker/python/build_module.py /usr/local/bin/build_module.py
 RUN chmod +x /usr/local/bin/build.sh /usr/local/bin/build_module.py
 
 USER builder

@@ -14,7 +14,8 @@ RUN mkdir -p /test/module /test/sample /test/output && \
     chown -R runner:runner /test
 
 # Copy test runner script
-COPY --chown=runner:runner test_runner.py /usr/local/bin/test_runner.py
+# Built with: docker build -f docker/test/Dockerfile .
+COPY --chown=runner:runner docker/test/test_runner.py /usr/local/bin/test_runner.py
 RUN chmod +x /usr/local/bin/test_runner.py
 
 USER runner

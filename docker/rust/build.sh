@@ -16,6 +16,19 @@ echo "Copying source to build directory..."
 cp -r /build/src /tmp/build-workspace
 cd /tmp/build-workspace
 
+# Copy .cargo config if it exists (contains important rustflags for WASI)
+if [ -d "/build/src/.cargo" ]; then
+    echo "Copying .cargo configuration..."
+    cp -r /build/src/.cargo /tmp/build-workspace/
+fi
+
+# Patch wadup-guest path for Docker environment
+# Handles relative paths like "../../crates/wadup-guest" from examples
+if grep -q 'path = "../../crates/wadup-guest"' Cargo.toml 2>/dev/null; then
+    echo "Patching wadup-guest path for Docker environment..."
+    sed -i 's|path = "../../crates/wadup-guest"|path = "/wadup/crates/wadup-guest"|' Cargo.toml
+fi
+
 # Extract package name from Cargo.toml
 PACKAGE_NAME=$(grep -E '^name\s*=' Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/' | tr '-' '_')
 echo "Package name: $PACKAGE_NAME"
