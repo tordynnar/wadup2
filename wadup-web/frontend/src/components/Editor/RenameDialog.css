@@ -1,0 +1,11 @@
+.rename-dialog {
+  width: 360px;
+}
+
+.rename-dialog .dialog-body {
+  padding: 16px 20px;
+}
+
+.rename-dialog .input {
+  width: 100%;
+}

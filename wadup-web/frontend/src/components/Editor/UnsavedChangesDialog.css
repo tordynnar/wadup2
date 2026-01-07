@@ -1,0 +1,23 @@
+.unsaved-changes-dialog {
+  width: 400px;
+}
+
+.unsaved-changes-dialog .dialog-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ctp-yellow);
+}
+
+.unsaved-changes-dialog .dialog-body {
+  padding: 16px 20px;
+}
+
+.unsaved-changes-dialog .dialog-body p {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.unsaved-changes-dialog .dialog-footer {
+  gap: 8px;
+}

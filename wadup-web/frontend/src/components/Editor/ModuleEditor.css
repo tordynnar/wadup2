@@ -46,6 +46,38 @@
   font-weight: 600;
 }
 
+/* Version Toggle */
+.version-toggle {
+  display: flex;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 2px;
+  margin-left: 12px;
+}
+
+.version-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.version-btn:hover {
+  color: var(--text-primary);
+}
+
+.version-btn.active {
+  background: var(--bg-secondary);
+  color: var(--accent);
+}
+
 /* Body */
 .editor-body {
   display: flex;
@@ -55,12 +87,11 @@
 
 /* Sidebar */
 .editor-sidebar {
-  width: 250px;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  height: 100%;
 }
 
 .editor-sidebar-header {
@@ -96,6 +127,20 @@
 .file-tree-row.active {
   background: var(--bg-tertiary);
   color: var(--accent);
+}
+
+.file-tree-row.drag-over {
+  background: rgba(198, 160, 246, 0.2);
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+
+.file-tree-row[draggable="true"] {
+  cursor: grab;
+}
+
+.file-tree-row[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 .file-tree-chevron {
@@ -175,9 +220,49 @@
   color: var(--text-primary);
 }
 
+.editor-tab:hover:not(.active) {
+  background: var(--bg-tertiary);
+}
+
+.tab-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin-left: 4px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.1s ease;
+}
+
+.editor-tab:hover .tab-close-btn,
+.editor-tab.active .tab-close-btn {
+  opacity: 1;
+}
+
+.tab-close-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
 .dirty-indicator {
   color: var(--ctp-yellow);
   font-weight: bold;
+}
+
+.tab-readonly-badge {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 3px;
+  margin-left: 4px;
 }
 
 .editor-content {
@@ -185,14 +270,18 @@
   overflow: hidden;
 }
 
+/* Build/Test Panel Containers */
+.build-panel-container,
+.test-panel-container {
+  border-left: 1px solid var(--border-color);
+}
+
 /* Build Panel */
 .build-panel {
-  width: 400px;
   background: var(--bg-secondary);
-  border-left: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  height: 100%;
 }
 
 .build-panel-header {

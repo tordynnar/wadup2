@@ -1,10 +1,8 @@
 .test-panel {
-  width: 450px;
   background: var(--bg-secondary);
-  border-left: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  height: 100%;
 }
 
 .test-panel-header {

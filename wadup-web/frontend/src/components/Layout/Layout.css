@@ -59,6 +59,20 @@
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
   flex-shrink: 0;
+  transition: width 0.2s ease;
+}
+
+.sidebar.collapsed {
+  width: 56px;
+}
+
+.sidebar.collapsed .sidebar-link {
+  justify-content: center;
+  padding: 10px;
+}
+
+.sidebar.collapsed .sidebar-link span {
+  display: none;
 }
 
 .sidebar-nav {

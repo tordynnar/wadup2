@@ -162,6 +162,7 @@ export default function TestPanel({ moduleId, onClose }: TestPanelProps) {
                     type="checkbox"
                     checked={selectedSamples.includes(sample.id)}
                     onChange={() => toggleSample(sample.id)}
+                    onClick={(e) => e.stopPropagation()}
                   />
                   <div className="sample-info">
                     <span className="sample-name">{sample.filename}</span>

@@ -148,6 +148,36 @@ def create_folder(
     return {"message": "Folder created"}
 
 
+@router.post("/{path:path}/rename")
+def rename_file(
+    module_id: int,
+    path: str,
+    new_path: str = Body(..., embed=True),
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """Rename a file or folder."""
+    module = get_module_with_access(module_id, user, db, require_write=True)
+
+    module_service = ModuleService()
+    try:
+        module_service.rename_file(module_id, path, new_path, "draft")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found")
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="Target already exists")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Update module timestamp
+    from datetime import datetime
+
+    module.updated_at = datetime.utcnow()
+    db.commit()
+
+    return {"message": "File renamed"}
+
+
 def detect_language(path: str) -> Optional[str]:
     """Detect programming language from file extension."""
     ext_map = {

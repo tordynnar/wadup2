@@ -153,6 +153,19 @@ class ModuleService:
         full_path = self._validate_path(module_id, folder_path, version)
         full_path.mkdir(parents=True, exist_ok=True)
 
+    def rename_file(self, module_id: int, old_path: str, new_path: str, version: str = "draft") -> None:
+        """Rename a file or folder."""
+        old_full_path = self._validate_path(module_id, old_path, version)
+        new_full_path = self._validate_path(module_id, new_path, version)
+
+        if not old_full_path.exists():
+            raise FileNotFoundError(f"File not found: {old_path}")
+        if new_full_path.exists():
+            raise FileExistsError(f"Target already exists: {new_path}")
+
+        new_full_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old_full_path), str(new_full_path))
+
     def copy_version(self, module_id: int, from_version: str, to_version: str) -> None:
         """Copy all files from one version to another."""
         src = self.get_module_path(module_id, from_version)

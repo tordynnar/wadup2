@@ -1,4 +1,4 @@
-import { ReactNode } from 'react'
+import { ReactNode, useState } from 'react'
 import Header from './Header'
 import Sidebar from './Sidebar'
 import StatusBar from './StatusBar'
@@ -9,11 +9,16 @@ interface LayoutProps {
 }
 
 export default function Layout({ children }: LayoutProps) {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+
   return (
     <div className="layout">
-      <Header />
+      <Header
+        onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
+        sidebarCollapsed={sidebarCollapsed}
+      />
       <div className="layout-body">
-        <Sidebar />
+        <Sidebar collapsed={sidebarCollapsed} />
         <main className="layout-main">
           {children}
         </main>

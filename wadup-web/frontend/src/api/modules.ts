@@ -46,6 +46,9 @@ export const modulesApi = {
   createFolder: (moduleId: number, path: string) =>
     post<void>(`/api/modules/${moduleId}/files/folders/${encodeURIComponent(path)}`),
 
+  renameFile: (moduleId: number, oldPath: string, newPath: string) =>
+    post<void>(`/api/modules/${moduleId}/files/${encodeURIComponent(oldPath)}/rename`, { new_path: newPath }),
+
   // Build operations
   startBuild: (moduleId: number) =>
     post<{ message: string }>(`/api/modules/${moduleId}/build`),

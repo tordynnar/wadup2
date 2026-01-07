@@ -273,6 +273,11 @@ body {
   color: var(--ctp-yellow);
 }
 
+.badge-accent {
+  background: rgba(198, 160, 246, 0.2);
+  color: var(--accent);
+}
+
 /* Utility classes */
 .flex { display: flex; }
 .flex-col { flex-direction: column; }

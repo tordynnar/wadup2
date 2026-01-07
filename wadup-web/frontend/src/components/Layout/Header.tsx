@@ -1,12 +1,24 @@
 import { useAuthStore } from '../../stores/authStore'
-import { LogOut, User } from 'lucide-react'
+import { LogOut, User, Menu, PanelLeftClose } from 'lucide-react'
 
-export default function Header() {
+interface HeaderProps {
+  onToggleSidebar: () => void
+  sidebarCollapsed: boolean
+}
+
+export default function Header({ onToggleSidebar, sidebarCollapsed }: HeaderProps) {
   const { user, logout } = useAuthStore()
 
   return (
     <header className="header">
       <div className="header-left">
+        <button
+          className="btn btn-ghost btn-icon hamburger-btn"
+          onClick={onToggleSidebar}
+          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {sidebarCollapsed ? <Menu size={20} /> : <PanelLeftClose size={20} />}
+        </button>
         <h1 className="header-title">WADUP Web</h1>
       </div>
 
