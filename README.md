@@ -14,6 +14,25 @@ A high-performance parallel processing framework that executes sandboxed WebAsse
 - **Recursive Processing**: Sub-content automatically queued for processing
 - **Ergonomic API**: Rust guest library for easy WASM module development
 
+## Project Structure
+
+```
+wadup2/
+├── crates/              # Rust crates (workspace)
+│   ├── wadup-core/      # Processing engine
+│   ├── wadup-guest/     # Rust guest library for WASM modules
+│   └── wadup-cli/       # Command-line interface
+├── guest/               # Guest libraries for other languages
+│   ├── python/          # Python wadup library
+│   └── go/              # Go wadup library
+├── examples/            # Example WASM modules (Rust, Python, Go)
+├── scripts/             # Build and utility scripts
+├── wadup-web/           # Web IDE for module development
+├── demo/                # Demo data and modules
+├── deps/                # Build dependencies (WASI SDK, Python, etc.)
+└── docker-compose.yml   # Elasticsearch + Kibana
+```
+
 ## Quick Start
 
 ### Installation
@@ -600,14 +619,16 @@ See the `examples/` directory for working WASM modules:
 - **byte-counter**: Counts and records file sizes
 - **zip-extractor**: Extracts files from ZIP archives
 - **sqlite-parser**: Parses SQLite databases using SQL queries
+- **simple-test**: Basic module for testing the framework
 
 **Python Modules:**
 - **python-sqlite-parser**: Parses SQLite databases using CPython 3.13.7
 - **python-counter**: Demonstrates module reuse with global state
 - **python-module-test**: Tests C extension imports (sqlite3, json, etc.)
 - **python-multi-file**: Multi-file project with third-party dependencies (chardet, humanize, python-slugify)
-- **python-numpy-test**: NumPy 2.4.0 array operations and linear algebra
-- **python-pandas-test**: Pandas 2.3.3 DataFrame operations
+- **python-pydantic-test**: Tests Pydantic data validation
+- **python-lxml-test**: Tests lxml XML/HTML parsing
+- **python-large-file-test**: Tests large if/elif chain handling
 
 **Go Modules:**
 - **go-sqlite-parser**: Parses SQLite databases using pure Go SQLite library
@@ -679,24 +700,6 @@ The build script:
 - Pure-Python packages are fully supported
 - Transitive dependencies are automatically resolved
 - Dependencies are bundled into the WASM module
-
-**Scientific Computing (NumPy & Pandas):**
-
-NumPy 2.4.0 and Pandas 2.3.3 are supported as C extensions. To use them:
-
-```toml
-[tool.wadup]
-entry-point = "my_module"
-c-extensions = ["numpy"]           # NumPy only (~44 MB WASM)
-# or
-c-extensions = ["numpy", "pandas"] # NumPy + Pandas (~62 MB WASM)
-```
-
-NumPy provides array operations, linear algebra (`numpy.linalg`), and mathematical functions. Pandas provides DataFrames, Series, and data manipulation. Some features requiring OS-level support (random, fft, mmap) are not available.
-
-For detailed build information and limitations:
-- [NumPy WASI Build Guide](NUMPY_WASI.md)
-- [Pandas WASI Build Guide](PANDAS_WASI.md)
 
 The shared Python WASI build (`deps/wasi-python/`) includes:
 - CPython 3.13.7 compiled for wasm32-wasip1
@@ -778,6 +781,19 @@ curl -s "http://localhost:9200/test/_search?pretty"
 # Run integration tests
 ./scripts/run-integration-tests.sh
 ```
+
+## WADUP Web
+
+WADUP Web is a browser-based IDE for developing, building, testing, and publishing WADUP modules. It provides a VS Code-like experience with:
+
+- **Monaco Editor** with syntax highlighting (Catppuccin Macchiato theme)
+- **Multi-language support**: Create Rust, Go, or Python modules
+- **File management**: Tree view with drag-and-drop, rename, create, delete
+- **Docker-based builds**: Compile modules to WebAssembly with real-time log streaming
+- **Test samples**: Upload files to test modules against
+- **Module publishing**: Draft/published version management
+
+See [wadup-web/README.md](wadup-web/README.md) for setup and usage instructions.
 
 ## License
 
