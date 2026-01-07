@@ -1,12 +1,14 @@
-import { Clock, User } from 'lucide-react'
+import { Clock, User, Trash2 } from 'lucide-react'
 import type { Module } from '../../types'
 
 interface ModuleCardProps {
   module: Module
   onClick: () => void
+  onDelete?: () => void
+  isOwner?: boolean
 }
 
-export default function ModuleCard({ module, onClick }: ModuleCardProps) {
+export default function ModuleCard({ module, onClick, onDelete, isOwner }: ModuleCardProps) {
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr)
     return date.toLocaleDateString('en-US', {
@@ -51,9 +53,23 @@ export default function ModuleCard({ module, onClick }: ModuleCardProps) {
       </div>
 
       <div className="module-card-footer">
-        {getBuildStatusBadge()}
-        {module.is_published && (
-          <span className="badge badge-info">Published</span>
+        <div className="module-card-badges">
+          {getBuildStatusBadge()}
+          {module.is_published && (
+            <span className="badge badge-info">Published</span>
+          )}
+        </div>
+        {isOwner && onDelete && (
+          <button
+            className="btn btn-ghost btn-icon btn-sm module-card-delete"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete()
+            }}
+            title="Delete module"
+          >
+            <Trash2 size={16} />
+          </button>
         )}
       </div>
     </div>

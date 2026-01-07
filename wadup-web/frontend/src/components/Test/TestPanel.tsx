@@ -53,6 +53,10 @@ export default function TestPanel({ moduleId, onClose }: TestPanelProps) {
   }
 
   const handleDelete = async (sampleId: number) => {
+    const sample = samples.find((s) => s.id === sampleId)
+    if (!confirm(`Are you sure you want to delete "${sample?.filename || 'this sample'}"?`)) {
+      return
+    }
     try {
       await samplesApi.delete(sampleId)
       setSamples((prev) => prev.filter((s) => s.id !== sampleId))

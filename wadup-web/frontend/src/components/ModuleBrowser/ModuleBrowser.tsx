@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Search, Package } from 'lucide-react'
 import { useModuleStore } from '../../stores/moduleStore'
+import { useAuthStore } from '../../stores/authStore'
 import ModuleCard from './ModuleCard'
 import CreateModuleDialog from './CreateModuleDialog'
 import './ModuleBrowser.css'
@@ -10,7 +11,8 @@ type Filter = 'all' | 'mine' | 'published'
 
 export default function ModuleBrowser() {
   const navigate = useNavigate()
-  const { modules, isLoadingList, loadModules } = useModuleStore()
+  const { user } = useAuthStore()
+  const { modules, isLoadingList, loadModules, deleteModule } = useModuleStore()
   const [filter, setFilter] = useState<Filter>('all')
   const [search, setSearch] = useState('')
   const [showCreateDialog, setShowCreateDialog] = useState(false)
@@ -26,6 +28,17 @@ export default function ModuleBrowser() {
   const handleModuleCreated = (moduleId: number) => {
     setShowCreateDialog(false)
     navigate(`/modules/${moduleId}`)
+  }
+
+  const handleModuleDelete = async (moduleId: number, moduleName: string) => {
+    if (!confirm(`Are you sure you want to delete "${moduleName}"? This action cannot be undone.`)) {
+      return
+    }
+    try {
+      await deleteModule(moduleId)
+    } catch (error) {
+      console.error('Failed to delete module:', error)
+    }
   }
 
   return (
@@ -97,6 +110,8 @@ export default function ModuleBrowser() {
               key={module.id}
               module={module}
               onClick={() => handleModuleClick(module.id)}
+              onDelete={() => handleModuleDelete(module.id, module.name)}
+              isOwner={user ? module.author_id === user.id : false}
             />
           ))
         )}

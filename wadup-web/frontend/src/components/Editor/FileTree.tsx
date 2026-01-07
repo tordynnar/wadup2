@@ -10,6 +10,11 @@ interface ContextMenuState {
   type: 'file' | 'directory'
 }
 
+interface DragState {
+  targetPath: string
+  position: 'inside' | 'before' | 'after'
+}
+
 interface FileTreeProps {
   tree: FileTreeNode
   currentFile: string | null
@@ -32,7 +37,8 @@ export default function FileTree({
   onMove,
 }: FileTreeProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
-  const [dragOverPath, setDragOverPath] = useState<string | null>(null)
+  const [dragState, setDragState] = useState<DragState | null>(null)
+  const [draggingPath, setDraggingPath] = useState<string | null>(null)
 
   const handleContextMenu = (
     e: React.MouseEvent,
@@ -46,41 +52,116 @@ export default function FileTree({
   const handleDragStart = (e: React.DragEvent, path: string) => {
     e.dataTransfer.setData('text/plain', path)
     e.dataTransfer.effectAllowed = 'move'
+    setDraggingPath(path)
   }
 
-  const handleDragOver = (e: React.DragEvent, path: string, isDirectory: boolean) => {
+  const handleDragEnd = () => {
+    setDraggingPath(null)
+    setDragState(null)
+  }
+
+  const handleDragOver = (
+    e: React.DragEvent,
+    path: string,
+    isDirectory: boolean,
+    rect: DOMRect
+  ) => {
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'move'
+
+    // Don't allow dropping onto self or into own subdirectory
+    if (draggingPath && (path === draggingPath || path.startsWith(draggingPath + '/'))) {
+      return
+    }
+
+    const y = e.clientY - rect.top
+    const height = rect.height
+
     if (isDirectory) {
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'move'
-      setDragOverPath(path)
+      // For directories: top 25% = before, middle 50% = inside, bottom 25% = after
+      if (y < height * 0.25) {
+        setDragState({ targetPath: path, position: 'before' })
+      } else if (y > height * 0.75) {
+        setDragState({ targetPath: path, position: 'after' })
+      } else {
+        setDragState({ targetPath: path, position: 'inside' })
+      }
+    } else {
+      // For files: top 50% = before, bottom 50% = after
+      if (y < height * 0.5) {
+        setDragState({ targetPath: path, position: 'before' })
+      } else {
+        setDragState({ targetPath: path, position: 'after' })
+      }
     }
   }
 
-  const handleDragLeave = () => {
-    setDragOverPath(null)
+  const handleDragLeave = (e: React.DragEvent) => {
+    // Only clear if leaving the file tree entirely
+    const relatedTarget = e.relatedTarget as HTMLElement
+    if (!relatedTarget || !e.currentTarget.contains(relatedTarget)) {
+      setDragState(null)
+    }
   }
 
-  const handleDrop = (e: React.DragEvent, targetPath: string) => {
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
-    setDragOverPath(null)
+    e.stopPropagation()
 
     const sourcePath = e.dataTransfer.getData('text/plain')
-    if (!sourcePath || sourcePath === targetPath) return
+    if (!sourcePath || !dragState) {
+      setDragState(null)
+      setDraggingPath(null)
+      return
+    }
+
+    const { targetPath, position } = dragState
+
+    // Don't allow dropping onto self
+    if (sourcePath === targetPath) {
+      setDragState(null)
+      setDraggingPath(null)
+      return
+    }
 
     // Don't allow dropping into own subdirectory
-    if (targetPath.startsWith(sourcePath + '/')) return
+    if (targetPath.startsWith(sourcePath + '/')) {
+      setDragState(null)
+      setDraggingPath(null)
+      return
+    }
 
-    // Calculate new path
-    const fileName = sourcePath.split('/').pop()
-    const newPath = targetPath ? `${targetPath}/${fileName}` : fileName!
+    // Calculate the destination path
+    const fileName = sourcePath.split('/').pop()!
+    let newPath: string
 
-    if (onMove) {
+    if (position === 'inside') {
+      // Drop into a folder
+      newPath = targetPath ? `${targetPath}/${fileName}` : fileName
+    } else {
+      // Drop before/after - put in the same parent folder
+      const parentPath = targetPath.includes('/')
+        ? targetPath.substring(0, targetPath.lastIndexOf('/'))
+        : ''
+      newPath = parentPath ? `${parentPath}/${fileName}` : fileName
+    }
+
+    if (onMove && newPath !== sourcePath) {
       onMove(sourcePath, newPath)
     }
+
+    setDragState(null)
+    setDraggingPath(null)
   }
 
   return (
-    <div className="file-tree" onDragLeave={handleDragLeave}>
+    <div
+      className="file-tree"
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      onDragOver={(e) => e.preventDefault()}
+    >
       {tree.children?.map((child) => (
         <FileTreeItem
           key={child.name}
@@ -89,9 +170,10 @@ export default function FileTree({
           onFileSelect={onFileSelect}
           onContextMenu={handleContextMenu}
           onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
           onDragOver={handleDragOver}
-          onDrop={handleDrop}
-          dragOverPath={dragOverPath}
+          dragState={dragState}
+          draggingPath={draggingPath}
           depth={0}
         />
       ))}
@@ -119,9 +201,10 @@ interface FileTreeItemProps {
   onFileSelect: (path: string) => void
   onContextMenu: (e: React.MouseEvent, path: string, type: 'file' | 'directory') => void
   onDragStart: (e: React.DragEvent, path: string) => void
-  onDragOver: (e: React.DragEvent, path: string, isDirectory: boolean) => void
-  onDrop: (e: React.DragEvent, targetPath: string) => void
-  dragOverPath: string | null
+  onDragEnd: () => void
+  onDragOver: (e: React.DragEvent, path: string, isDirectory: boolean, rect: DOMRect) => void
+  dragState: DragState | null
+  draggingPath: string | null
   depth: number
 }
 
@@ -131,15 +214,21 @@ function FileTreeItem({
   onFileSelect,
   onContextMenu,
   onDragStart,
+  onDragEnd,
   onDragOver,
-  onDrop,
-  dragOverPath,
+  dragState,
+  draggingPath,
   depth,
 }: FileTreeItemProps) {
   const [isExpanded, setIsExpanded] = useState(depth < 2)
   const isDirectory = node.type === 'directory'
   const isActive = node.path === currentFile
-  const isDragOver = dragOverPath === node.path
+  const isDragging = draggingPath === node.path
+
+  // Determine drop indicator state
+  const showDropBefore = dragState?.targetPath === node.path && dragState?.position === 'before'
+  const showDropAfter = dragState?.targetPath === node.path && dragState?.position === 'after'
+  const showDropInside = dragState?.targetPath === node.path && dragState?.position === 'inside'
 
   const handleClick = () => {
     if (isDirectory) {
@@ -163,13 +252,8 @@ function FileTreeItem({
 
   const handleDragOver = (e: React.DragEvent) => {
     if (node.path) {
-      onDragOver(e, node.path, isDirectory)
-    }
-  }
-
-  const handleDrop = (e: React.DragEvent) => {
-    if (node.path && isDirectory) {
-      onDrop(e, node.path)
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      onDragOver(e, node.path, isDirectory, rect)
     }
   }
 
@@ -188,15 +272,16 @@ function FileTreeItem({
   }
 
   return (
-    <div className="file-tree-item">
+    <div className={`file-tree-item ${isDragging ? 'dragging' : ''}`}>
+      {showDropBefore && <div className="drop-indicator drop-indicator-before" style={{ marginLeft: `${depth * 16 + 8}px` }} />}
       <div
-        className={`file-tree-row ${isActive ? 'active' : ''} ${isDragOver ? 'drag-over' : ''}`}
+        className={`file-tree-row ${isActive ? 'active' : ''} ${showDropInside ? 'drag-over' : ''}`}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
         draggable
         onDragStart={handleDragStart}
+        onDragEnd={onDragEnd}
         onDragOver={handleDragOver}
-        onDrop={handleDrop}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >
         {isDirectory && (
@@ -208,6 +293,7 @@ function FileTreeItem({
         {getFileIcon()}
         <span className="file-tree-name">{node.name}</span>
       </div>
+      {showDropAfter && !isExpanded && <div className="drop-indicator drop-indicator-after" style={{ marginLeft: `${depth * 16 + 8}px` }} />}
 
       {isDirectory && isExpanded && node.children && (
         <div className="file-tree-children">
@@ -219,12 +305,14 @@ function FileTreeItem({
               onFileSelect={onFileSelect}
               onContextMenu={onContextMenu}
               onDragStart={onDragStart}
+              onDragEnd={onDragEnd}
               onDragOver={onDragOver}
-              onDrop={onDrop}
-              dragOverPath={dragOverPath}
+              dragState={dragState}
+              draggingPath={draggingPath}
               depth={depth + 1}
             />
           ))}
+          {showDropAfter && <div className="drop-indicator drop-indicator-after" style={{ marginLeft: `${(depth + 1) * 16 + 8}px` }} />}
         </div>
       )}
     </div>

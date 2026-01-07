@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Play, Upload, FlaskConical, X, Eye, Code } from 'lucide-react'
 import { useModuleStore } from '../../stores/moduleStore'
+import { useAuthStore } from '../../stores/authStore'
 import { modulesApi } from '../../api/modules'
 import FileTree from './FileTree'
 import MonacoEditor from './MonacoEditor'
@@ -28,6 +29,7 @@ interface CreateDialogState {
 export default function ModuleEditor() {
   const { moduleId } = useParams<{ moduleId: string }>()
   const navigate = useNavigate()
+  const { user } = useAuthStore()
   const {
     currentModule,
     fileTree,
@@ -116,6 +118,16 @@ export default function ModuleEditor() {
     }
   }, [moduleId, currentModule, viewingVersion, loadFileTree])
 
+  // Non-owners viewing published modules should always see the published version
+  useEffect(() => {
+    if (currentModule && user) {
+      const ownsModule = currentModule.author_id === user.id
+      if (!ownsModule && currentModule.is_published && viewingVersion === 'draft') {
+        setViewingVersion('published')
+      }
+    }
+  }, [currentModule, user, viewingVersion])
+
   const handleContentChange = (value: string | undefined) => {
     if (value !== undefined) {
       setFileContent(value)
@@ -160,7 +172,8 @@ export default function ModuleEditor() {
     )
   }
 
-  const isOwner = true // TODO: Check against current user
+  // Check if current user owns this module
+  const isOwner = user ? currentModule.author_id === user.id : false
 
   const handlePublish = async () => {
     if (!moduleId) return
@@ -176,7 +189,6 @@ export default function ModuleEditor() {
   }
 
   const canTest = currentModule.draft_version?.build_status === 'success'
-  const canPublish = canTest && !currentModule.is_published
 
   // Determine status tags
   const hasUnbuiltChanges = currentModule.draft_version?.built_at
@@ -188,6 +200,9 @@ export default function ModuleEditor() {
       (currentModule.published_at &&
         currentModule.draft_version.built_at &&
         new Date(currentModule.draft_version.built_at) > new Date(currentModule.published_at)))
+
+  // Can publish if there's a successful build that hasn't been published yet
+  const canPublish = hasUnpublishedBuild
 
   // File operation handlers
   const handleRename = (path: string) => {
@@ -259,7 +274,10 @@ export default function ModuleEditor() {
     if (!moduleId || !unsavedDialog.path) return
     const tab = openTabs.find((t) => t.path === unsavedDialog.path)
     if (tab) {
-      await saveFile(parseInt(moduleId), tab.path, tab.content)
+      // Use fileContent if saving the current file (it has the latest changes)
+      // Otherwise use the tab's stored content
+      const contentToSave = tab.path === currentFile ? fileContent : tab.content
+      await saveFile(parseInt(moduleId), tab.path, contentToSave)
     }
     if (unsavedDialog.action === 'close') {
       closeTab(unsavedDialog.path)
@@ -299,14 +317,17 @@ export default function ModuleEditor() {
           </div>
           {currentModule.is_published && (
             <div className="version-toggle">
-              <button
-                className={`version-btn ${viewingVersion === 'draft' ? 'active' : ''}`}
-                onClick={() => handleVersionSwitch('draft')}
-                title="View working draft"
-              >
-                <Code size={16} />
-                Draft
-              </button>
+              {/* Only show Draft button to the owner */}
+              {isOwner && (
+                <button
+                  className={`version-btn ${viewingVersion === 'draft' ? 'active' : ''}`}
+                  onClick={() => handleVersionSwitch('draft')}
+                  title="View working draft"
+                >
+                  <Code size={16} />
+                  Draft
+                </button>
+              )}
               <button
                 className={`version-btn ${viewingVersion === 'published' ? 'active' : ''}`}
                 onClick={() => handleVersionSwitch('published')}

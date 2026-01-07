@@ -6,10 +6,28 @@ FROM rust:1.83-slim-bookworm
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Add wasm32-wasip1 target
 RUN rustup target add wasm32-wasip1
+
+# Install WASI SDK for compiling C code (needed for rusqlite bundled feature)
+ARG WASI_SDK_VERSION=24.0
+ARG TARGETARCH
+RUN ARCH=$(case "$TARGETARCH" in "arm64") echo "arm64" ;; *) echo "x86_64" ;; esac) && \
+    curl -fsSL "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION%%.*}/wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-linux.tar.gz" | \
+    tar xz -C /opt && \
+    mv /opt/wasi-sdk-${WASI_SDK_VERSION}-${ARCH}-linux /opt/wasi-sdk
+
+# Set WASI SDK environment variables
+ENV WASI_SDK_PATH=/opt/wasi-sdk
+ENV CC_wasm32_wasip1=/opt/wasi-sdk/bin/clang
+ENV CFLAGS_wasm32_wasip1="--sysroot=/opt/wasi-sdk/share/wasi-sysroot"
+
+# SQLite compile flags for WASI (disable threading)
+ENV LIBSQLITE3_FLAGS="-DSQLITE_THREADSAFE=0"
 
 # Create builder user
 RUN useradd -m -s /bin/bash builder

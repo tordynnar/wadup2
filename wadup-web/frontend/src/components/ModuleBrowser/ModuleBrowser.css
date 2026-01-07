@@ -174,7 +174,28 @@
 
 .module-card-footer {
   display: flex;
+  justify-content: space-between;
+  align-items: center;
   gap: 8px;
+}
+
+.module-card-badges {
+  display: flex;
+  gap: 8px;
+}
+
+.module-card-delete {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  color: var(--text-muted);
+}
+
+.module-card-delete:hover {
+  color: var(--error);
+}
+
+.module-card:hover .module-card-delete {
+  opacity: 1;
 }
 
 /* Dialog */

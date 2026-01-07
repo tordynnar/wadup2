@@ -82,6 +82,43 @@ def run_module(wasm_path: str, sample_path: str, filename: str) -> dict:
         linker = wasmtime.Linker(engine)
         linker.define_wasi()
 
+        # Add compiler-rt soft-float intrinsics needed by some modules (e.g., SQLite)
+        # These use "return by pointer" calling convention: first param is i32 pointer to result
+        def add_soft_float_intrinsics(linker: wasmtime.Linker, store: wasmtime.Store) -> None:
+            # f128 functions use return-by-pointer: (result_ptr: i32, value: i64) -> void
+            # The result is written to memory at result_ptr
+
+            # __floatunditf - Convert unsigned i64 to f128 (result written to ptr)
+            ft_i64_to_f128 = wasmtime.FuncType([wasmtime.ValType.i32(), wasmtime.ValType.i64()], [])
+            linker.define_func("env", "__floatunditf", ft_i64_to_f128, lambda *args: None)
+            linker.define_func("env", "__floatditf", ft_i64_to_f128, lambda *args: None)
+
+            # __trunctfdf2 - Convert f128 to f64 (f128 passed as two i64s)
+            ft_f128_to_f64 = wasmtime.FuncType([wasmtime.ValType.i64(), wasmtime.ValType.i64()], [wasmtime.ValType.f64()])
+            linker.define_func("env", "__trunctfdf2", ft_f128_to_f64, lambda *args: 0.0)
+
+            # __extenddftf2 - Convert f64 to f128 (result_ptr: i32, value: f64)
+            ft_f64_to_f128 = wasmtime.FuncType([wasmtime.ValType.i32(), wasmtime.ValType.f64()], [])
+            linker.define_func("env", "__extenddftf2", ft_f64_to_f128, lambda *args: None)
+
+            # Comparison functions (f128, f128) -> i32
+            # f128 passed as four i64s (two per f128)
+            ft_f128_cmp = wasmtime.FuncType([wasmtime.ValType.i64(), wasmtime.ValType.i64(), wasmtime.ValType.i64(), wasmtime.ValType.i64()], [wasmtime.ValType.i32()])
+            for name in ["__letf2", "__getf2", "__unordtf2", "__eqtf2", "__netf2", "__lttf2", "__gttf2"]:
+                linker.define_func("env", name, ft_f128_cmp, lambda *args: 0)
+
+            # Arithmetic functions (result_ptr: i32, a_lo: i64, a_hi: i64, b_lo: i64, b_hi: i64) -> void
+            ft_f128_binop = wasmtime.FuncType([wasmtime.ValType.i32(), wasmtime.ValType.i64(), wasmtime.ValType.i64(), wasmtime.ValType.i64(), wasmtime.ValType.i64()], [])
+            for name in ["__multf3", "__addtf3", "__subtf3", "__divtf3"]:
+                linker.define_func("env", name, ft_f128_binop, lambda *args: None)
+
+            # Conversion functions f128 -> i64
+            ft_f128_to_i64 = wasmtime.FuncType([wasmtime.ValType.i64(), wasmtime.ValType.i64()], [wasmtime.ValType.i64()])
+            linker.define_func("env", "__fixtfdi", ft_f128_to_i64, lambda *args: 0)
+            linker.define_func("env", "__fixunstfdi", ft_f128_to_i64, lambda *args: 0)
+
+        add_soft_float_intrinsics(linker, store)
+
         try:
             instance = linker.instantiate(store, module)
         except Exception as e:

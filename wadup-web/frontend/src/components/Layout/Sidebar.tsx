@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { Package, Upload, Settings } from 'lucide-react'
+import { Package, Upload } from 'lucide-react'
 
 interface SidebarProps {
   collapsed: boolean
@@ -27,13 +27,6 @@ export default function Sidebar({ collapsed }: SidebarProps) {
           {!collapsed && <span>Test Samples</span>}
         </NavLink>
       </nav>
-
-      <div className="sidebar-footer">
-        <button className="sidebar-link" title="Settings">
-          <Settings size={18} />
-          {!collapsed && <span>Settings</span>}
-        </button>
-      </div>
     </aside>
   )
 }
