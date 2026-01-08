@@ -168,6 +168,7 @@ impl MetadataStore {
                     Value::Int64(i) => i.to_string(),
                     Value::Float64(f) => f.to_string(),
                     Value::String(s) => s.clone(),
+                    Value::Boolean(b) => b.to_string(),
                 };
                 columns.insert(col_name.clone(), string_value);
             }

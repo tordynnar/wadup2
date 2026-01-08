@@ -5,6 +5,7 @@ pub enum DataType {
     Int64,
     Float64,
     String,
+    Boolean,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,4 +25,5 @@ pub enum Value {
     Int64(i64),
     Float64(f64),
     String(String),
+    Boolean(bool),
 }
