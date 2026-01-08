@@ -60,6 +60,10 @@ class BuildService:
             artifact_path = settings.artifacts_dir / str(module_id) / "draft"
             artifact_path.mkdir(parents=True, exist_ok=True)
 
+            # Convert to host paths for Docker volume mounts
+            host_source_path = settings.get_host_path(source_path)
+            host_artifact_path = settings.get_host_path(artifact_path)
+
             image = self.get_image_for_language(language)
             self._add_log(module_id, f"Starting build with image: {image}")
 
@@ -69,8 +73,8 @@ class BuildService:
                     image,
                     detach=True,
                     volumes={
-                        str(source_path): {"bind": "/build/src", "mode": "ro"},
-                        str(artifact_path): {"bind": "/build/output", "mode": "rw"},
+                        str(host_source_path): {"bind": "/build/src", "mode": "ro"},
+                        str(host_artifact_path): {"bind": "/build/output", "mode": "rw"},
                     },
                     user="builder",
                     working_dir="/build/src",

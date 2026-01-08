@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     artifacts_dir: Path = STORAGE_DIR / "artifacts"
     samples_dir: Path = STORAGE_DIR / "samples"
 
+    # Host storage path (for Docker volume mounts when running inside container)
+    # When running in Docker, this should be set to the host path that maps to storage_root
+    host_storage_root: Path | None = None
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8080
@@ -40,6 +44,29 @@ class Settings(BaseSettings):
     class Config:
         env_prefix = "WADUP_"
         env_file = ".env"
+
+    def get_host_path(self, container_path: Path) -> Path:
+        """Convert a container storage path to a host path for Docker volume mounts.
+
+        When running inside a container, volume mounts need the host path, not the
+        container path. This method translates paths under storage_root to their
+        corresponding paths under host_storage_root.
+        """
+        if self.host_storage_root is None:
+            # Not running in container mode, use paths as-is
+            return container_path
+
+        # Make paths absolute and resolve symlinks
+        container_path = container_path.resolve()
+        storage_root = self.storage_root.resolve()
+
+        # Check if the path is under storage_root
+        try:
+            relative = container_path.relative_to(storage_root)
+            return self.host_storage_root / relative
+        except ValueError:
+            # Path is not under storage_root, return as-is
+            return container_path
 
 
 settings = Settings()

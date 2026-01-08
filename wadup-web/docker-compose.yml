@@ -11,8 +11,9 @@ services:
       - ./storage:/app/storage
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - WADUP_DATABASE_URL=sqlite:///./storage/wadup.db
+      - WADUP_DATABASE_URL=sqlite:////app/storage/wadup.db
       - WADUP_STORAGE_ROOT=/app/storage
+      - WADUP_HOST_STORAGE_ROOT=${PWD}/storage
       - WADUP_DEBUG=false
     depends_on:
       - build-rust

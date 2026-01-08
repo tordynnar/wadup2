@@ -59,6 +59,10 @@ class TestService:
             wasm_path = self.storage_root / module_version.wasm_path
             sample_path = self.storage_root / sample.file_path
 
+            # Convert to host paths for Docker volume mounts
+            host_wasm_path = settings.get_host_path(wasm_path)
+            host_sample_path = settings.get_host_path(sample_path)
+
             self._add_output(run_id, f"Testing with sample: {sample.filename}")
             self._add_output(run_id, f"WASM module: {wasm_path.name}")
             self._add_output(run_id, f"Running in Docker container...")
@@ -75,8 +79,8 @@ class TestService:
                     ],
                     detach=True,
                     volumes={
-                        str(wasm_path): {"bind": "/test/module.wasm", "mode": "ro"},
-                        str(sample_path): {"bind": "/test/sample.bin", "mode": "ro"},
+                        str(host_wasm_path): {"bind": "/test/module.wasm", "mode": "ro"},
+                        str(host_sample_path): {"bind": "/test/sample.bin", "mode": "ro"},
                     },
                     remove=False,
                     mem_limit="512m",
