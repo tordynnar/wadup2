@@ -1,5 +1,11 @@
 # WADUP Python Build Image
 # Builds Python modules to WebAssembly using CPython + WASI SDK
+#
+# This image downloads and builds all WASI dependencies from source:
+# - C libraries: zlib, bzip2, xz, sqlite, libxml2, libxslt
+# - CPython 3.13 for WASI
+# - lxml C extension
+# - pydantic_core Rust extension
 
 FROM python:3.13-slim-bookworm
 
@@ -8,6 +14,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     xz-utils \
+    make \
+    patch \
+    gcc \
+    g++ \
+    unzip \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and install WASI SDK (auto-detect architecture)
@@ -26,24 +38,28 @@ RUN ARCH=$(uname -m) && \
 
 ENV WASI_SDK_PATH=/opt/wasi-sdk
 
-# Create builder user
-RUN useradd -m -s /bin/bash builder
+# Install Rust with wasm32-wasip1 target (required for pydantic_core)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN rustup target add wasm32-wasip1
 
 # Create wadup directory structure
-RUN mkdir -p /wadup/deps /wadup/guest/python && chown -R builder:builder /wadup
+RUN mkdir -p /wadup/deps /wadup/guest/python
 
-# Copy pre-built WASI libraries (from deps/ directory)
-# Built with: docker build -f docker/python/Dockerfile .
-# These are cross-platform since they're wasm32-wasi object files
-COPY --chown=builder:builder docker/python/wasi-deps/wasi-python /wadup/deps/wasi-python
-COPY --chown=builder:builder docker/python/wasi-deps/wasi-zlib /wadup/deps/wasi-zlib
-COPY --chown=builder:builder docker/python/wasi-deps/wasi-bzip2 /wadup/deps/wasi-bzip2
-COPY --chown=builder:builder docker/python/wasi-deps/wasi-xz /wadup/deps/wasi-xz
-COPY --chown=builder:builder docker/python/wasi-deps/wasi-sqlite /wadup/deps/wasi-sqlite
-COPY --chown=builder:builder docker/python/wasi-deps/wasi-lxml /wadup/deps/wasi-lxml
-COPY --chown=builder:builder docker/python/wasi-deps/wasi-libxml2 /wadup/deps/wasi-libxml2
-COPY --chown=builder:builder docker/python/wasi-deps/wasi-libxslt /wadup/deps/wasi-libxslt
-COPY --chown=builder:builder docker/python/wasi-deps/wasi-pydantic /wadup/deps/wasi-pydantic
+# Copy build script and patches for WASI dependencies
+COPY docker/python/download-and-build-deps.sh /tmp/
+COPY docker/python/patches/ /tmp/patches/
+COPY docker/python/config.site-wasm32-wasi /tmp/
+
+# Build all WASI dependencies from source
+# This downloads and compiles: zlib, bzip2, xz, sqlite, libxml2, libxslt, CPython, lxml, pydantic
+RUN chmod +x /tmp/download-and-build-deps.sh && \
+    /tmp/download-and-build-deps.sh && \
+    rm -rf /tmp/patches /tmp/*.sh /tmp/*.site*
+
+# Create builder user
+RUN useradd -m -s /bin/bash builder && \
+    chown -R builder:builder /wadup
 
 # Copy Python guest library
 COPY --chown=builder:builder guest/python /wadup/guest/python

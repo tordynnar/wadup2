@@ -1,0 +1,36 @@
+--- a/Python/ceval_gil.c
++++ b/Python/ceval_gil.c
+@@ -632,6 +632,24 @@ _PyEval_ReInitThreads(PyThreadState *tstate)
+ }
+ #endif
+
++#ifdef __wasi__
++/* WASI: Single-threaded environment - GIL operations are no-ops.
++   _PyThreadState_Detach/_Attach fail because WASI lacks threading primitives.
++   Instead, we keep the thread state attached and skip GIL manipulation entirely.
++   This matches Pyodide/Emscripten's approach where threading stubs make these no-ops. */
++
++PyThreadState *
++PyEval_SaveThread(void)
++{
++    return _PyThreadState_GET();
++}
++
++void
++PyEval_RestoreThread(PyThreadState *tstate)
++{
++    (void)tstate;  /* Thread state remains attached in single-threaded WASI */
++}
++#else  /* !__wasi__ */
+ PyThreadState *
+ PyEval_SaveThread(void)
+ {
+@@ -653,7 +671,7 @@ PyEval_RestoreThread(PyThreadState *tstate)
+     SetLastError(err);
+ #endif
+ }
+-
++#endif  /* __wasi__ */
+
+ void
+ _PyEval_SignalReceived(void)

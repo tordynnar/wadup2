@@ -24,22 +24,22 @@ services:
   # These are built once and used by the web app
   build-rust:
     build:
-      context: .
-      dockerfile: Dockerfile.build-rust
+      context: ..
+      dockerfile: docker/rust/Dockerfile
     image: wadup-build-rust:latest
     command: ["echo", "Image built successfully"]
 
   build-go:
     build:
-      context: .
-      dockerfile: Dockerfile.build-go
+      context: ..
+      dockerfile: docker/go/Dockerfile
     image: wadup-build-go:latest
     command: ["echo", "Image built successfully"]
 
   build-python:
     build:
-      context: .
-      dockerfile: Dockerfile.build-python
+      context: ..
+      dockerfile: docker/python/Dockerfile
     image: wadup-build-python:latest
     command: ["echo", "Image built successfully"]
 
