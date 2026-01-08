@@ -25,7 +25,7 @@ echo ""
 echo "Building wadup-build-python:latest..."
 docker build -t wadup-build-python:latest -f docker/python/Dockerfile .
 
-# Build Test Runner image
+# Build Test Runner image (includes Rust compilation in multi-stage build)
 echo ""
 echo "Building wadup-test-runner:latest..."
 docker build -t wadup-test-runner:latest -f docker/test/Dockerfile .

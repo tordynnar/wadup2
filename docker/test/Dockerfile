@@ -1,25 +1,38 @@
 # WADUP Test Runner Image
-# Executes WASM modules against sample files using wasmtime
+# Executes WASM modules against sample files using the Rust wadup CLI
 
-FROM python:3.12-slim-bookworm
+# Build stage - compile wadup for Linux
+FROM rust:1.83-bookworm AS builder
 
-# Install wasmtime Python package
-RUN pip install --no-cache-dir wasmtime==27.0.0
+WORKDIR /wadup
+
+# Copy only the files needed for compilation
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+
+# Build the wadup binary
+RUN cargo build --release -p wadup-cli
+
+# Runtime stage - minimal image with just the binary
+FROM debian:bookworm-slim
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create runner user
 RUN useradd -m -s /bin/bash runner
 
-# Create directories
-RUN mkdir -p /test/module /test/sample /test/output && \
-    chown -R runner:runner /test
+# Copy the compiled binary from builder
+COPY --from=builder --chown=runner:runner /wadup/target/release/wadup /usr/local/bin/wadup
+RUN chmod +x /usr/local/bin/wadup
 
-# Copy test runner script
-# Built with: docker build -f docker/test/Dockerfile .
-COPY --chown=runner:runner docker/test/test_runner.py /usr/local/bin/test_runner.py
-RUN chmod +x /usr/local/bin/test_runner.py
+# Create directories
+RUN mkdir -p /test && chown -R runner:runner /test
 
 USER runner
 WORKDIR /test
 
-# Default entrypoint runs the test runner
-ENTRYPOINT ["python3", "/usr/local/bin/test_runner.py"]
+# Default entrypoint runs the test subcommand
+ENTRYPOINT ["wadup", "test"]

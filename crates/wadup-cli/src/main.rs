@@ -61,6 +61,27 @@ enum Commands {
         #[arg(long, default_value = "100", help = "Maximum recursion depth for sub-content")]
         max_recursion_depth: usize,
     },
+
+    /// Test a single WASM module against a sample file (outputs JSON)
+    Test {
+        #[arg(short = 'm', long, help = "Path to the WASM module file")]
+        module: PathBuf,
+
+        #[arg(short = 's', long, help = "Path to the sample file to process")]
+        sample: PathBuf,
+
+        #[arg(short = 'f', long, default_value = "sample", help = "Original filename (passed as WADUP_FILENAME)")]
+        filename: String,
+
+        #[arg(long, help = "Fuel limit (CPU) for module execution")]
+        fuel: Option<u64>,
+
+        #[arg(long, help = "Maximum memory in bytes")]
+        max_memory: Option<usize>,
+
+        #[arg(long, help = "Maximum stack size in bytes")]
+        max_stack: Option<usize>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -85,6 +106,9 @@ fn main() -> Result<()> {
         }
         Commands::Run { modules, input, es_url, es_index, threads, fuel, max_memory, max_stack, max_recursion_depth } => {
             run_process(modules, input, es_url, es_index, threads, fuel, max_memory, max_stack, max_recursion_depth)
+        }
+        Commands::Test { module, sample, filename, fuel, max_memory, max_stack } => {
+            run_test_command(module, sample, filename, fuel, max_memory, max_stack)
         }
     }
 }
@@ -248,4 +272,42 @@ fn load_files(input_dir: &PathBuf) -> Result<Vec<Content>> {
     }
 
     Ok(contents)
+}
+
+fn run_test_command(
+    module: PathBuf,
+    sample: PathBuf,
+    filename: String,
+    fuel: Option<u64>,
+    max_memory: Option<usize>,
+    max_stack: Option<usize>,
+) -> Result<()> {
+    // Validate inputs
+    if !module.exists() {
+        anyhow::bail!("Module not found: {:?}", module);
+    }
+    if !sample.exists() {
+        anyhow::bail!("Sample not found: {:?}", sample);
+    }
+
+    // Configure resource limits
+    let limits = ResourceLimits {
+        fuel,
+        max_memory,
+        max_stack,
+    };
+
+    // Run the test
+    let output = wadup_core::run_test(&module, &sample, &filename, limits);
+
+    // Output JSON to stdout
+    let json = serde_json::to_string_pretty(&output)?;
+    println!("{}", json);
+
+    // Exit with appropriate code
+    if output.success {
+        Ok(())
+    } else {
+        std::process::exit(1);
+    }
 }

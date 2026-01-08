@@ -8,6 +8,8 @@ pub mod bindings_types;
 pub mod bindings_context;
 pub mod shared_buffer;
 pub mod precompile;
+pub mod test_output;
+pub mod test_runner;
 
 pub use content::*;
 pub use metadata::*;
@@ -16,3 +18,5 @@ pub use processor::*;
 pub use bindings_types::*;
 pub use bindings_context::*;
 pub use precompile::*;
+pub use test_output::*;
+pub use test_runner::*;
