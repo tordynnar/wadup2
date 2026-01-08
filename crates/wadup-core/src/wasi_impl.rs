@@ -78,6 +78,8 @@ pub struct WasiCtx {
     pub filesystem: Arc<MemoryFilesystem>,
     file_table: Arc<RwLock<HashMap<Fd, FileHandle>>>,
     next_fd: Arc<RwLock<Fd>>,
+    /// Environment variables
+    env_vars: Vec<(String, String)>,
     /// Captured stdout output
     stdout_capture: Mutex<Vec<u8>>,
     /// Captured stderr output
@@ -90,6 +92,11 @@ pub struct WasiCtx {
 
 impl WasiCtx {
     pub fn new(filesystem: Arc<MemoryFilesystem>) -> Self {
+        Self::with_env_vars(filesystem, Vec::new())
+    }
+
+    /// Create a new WASI context with environment variables.
+    pub fn with_env_vars(filesystem: Arc<MemoryFilesystem>, env_vars: Vec<(String, String)>) -> Self {
         let mut file_table = HashMap::new();
 
         // Reserve FDs for stdio
@@ -103,11 +110,28 @@ impl WasiCtx {
             filesystem,
             file_table: Arc::new(RwLock::new(file_table)),
             next_fd: Arc::new(RwLock::new(4)),
+            env_vars,
             stdout_capture: Mutex::new(Vec::new()),
             stderr_capture: Mutex::new(Vec::new()),
             stdout_truncated: AtomicBool::new(false),
             stderr_truncated: AtomicBool::new(false),
         }
+    }
+
+    /// Get the number of environment variables and total buffer size needed.
+    pub fn environ_sizes(&self) -> (usize, usize) {
+        let count = self.env_vars.len();
+        let buf_size: usize = self.env_vars.iter()
+            .map(|(k, v)| k.len() + 1 + v.len() + 1) // "KEY=VALUE\0"
+            .sum();
+        (count, buf_size)
+    }
+
+    /// Get environment variables as "KEY=VALUE\0" strings.
+    pub fn environ_strings(&self) -> Vec<String> {
+        self.env_vars.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect()
     }
 
     fn allocate_fd(&self) -> Fd {

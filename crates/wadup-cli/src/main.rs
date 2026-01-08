@@ -282,6 +282,9 @@ fn run_test_command(
     max_memory: Option<usize>,
     max_stack: Option<usize>,
 ) -> Result<()> {
+    use wadup_core::wasm::ModuleInstance;
+    use wadup_core::precompile::load_module_with_cache;
+
     // Validate inputs
     if !module.exists() {
         anyhow::bail!("Module not found: {:?}", module);
@@ -297,8 +300,47 @@ fn run_test_command(
         max_stack,
     };
 
+    // Create engine with resource limits
+    let mut config = wasmtime::Config::new();
+    config.wasm_multi_memory(true);
+    config.async_support(false);
+    if limits.fuel.is_some() {
+        config.consume_fuel(true);
+    }
+    if let Some(max_stack) = limits.max_stack {
+        config.max_wasm_stack(max_stack);
+    }
+    let engine = wasmtime::Engine::new(&config)?;
+
+    // Load module
+    let wasm_module = load_module_with_cache(&engine, &module)?;
+
+    // Extract module name from path
+    let module_name = module
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("module")
+        .to_string();
+
+    // Set up environment variables (WADUP_FILENAME)
+    let env_vars = vec![
+        ("WADUP_FILENAME".to_string(), filename),
+    ];
+
+    // Create module instance with environment variables
+    let mut instance = ModuleInstance::with_env_vars(
+        &engine,
+        &wasm_module,
+        &module_name,
+        &limits,
+        env_vars,
+    )?;
+
+    // Load sample file
+    let sample_data = wadup_core::shared_buffer::SharedBuffer::from_file(&sample)?;
+
     // Run the test
-    let output = wadup_core::run_test(&module, &sample, &filename, limits);
+    let output = instance.process_content_for_test(sample_data);
 
     // Output JSON to stdout
     let json = serde_json::to_string_pretty(&output)?;

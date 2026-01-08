@@ -220,6 +220,82 @@ impl ModuleInstance {
         })
     }
 
+    /// Create a new instance with environment variables (for test mode).
+    pub fn with_env_vars(
+        engine: &Engine,
+        module: &Module,
+        name: &str,
+        limits: &ResourceLimits,
+        env_vars: Vec<(String, String)>,
+    ) -> Result<Self> {
+        // Create a dummy context for initialization
+        let dummy_ctx = ProcessingContext::new(
+            uuid::Uuid::nil(),
+            crate::shared_buffer::SharedBuffer::from_vec(Vec::new()),
+        );
+
+        // Create in-memory filesystem
+        let filesystem = Arc::new(MemoryFilesystem::new());
+
+        // Create directories for WASI filesystem
+        filesystem.create_dir_all("/tmp")?;
+        filesystem.create_dir_all("/metadata")?;
+        filesystem.create_dir_all("/subcontent")?;
+
+        // Create empty /data.bin file
+        filesystem.create_file("/data.bin", Vec::new())?;
+
+        // Create WASI context with our in-memory filesystem and env vars
+        let wasi_ctx = WasiCtx::with_env_vars(filesystem, env_vars);
+
+        // Create resource limiter if memory limit is specified
+        let resource_limiter = limits.max_memory.map(|max_memory| {
+            ResourceLimiterImpl { max_memory }
+        });
+
+        let store_data = StoreData {
+            processing_ctx: dummy_ctx,
+            wasi_ctx,
+            resource_limiter,
+        };
+
+        let mut store = Store::new(engine, store_data);
+
+        // Set fuel limit if specified
+        if let Some(fuel) = limits.fuel {
+            store.set_fuel(fuel)?;
+        }
+
+        // Set memory limits if specified
+        if store.data().resource_limiter.is_some() {
+            store.limiter(|data| data.resource_limiter.as_mut().unwrap());
+        }
+
+        let mut linker = Linker::new(engine);
+
+        // Add WASI Preview1 functions
+        Self::add_wasi_functions(&mut linker)?;
+
+        let instance = linker.instantiate(&mut store, module)?;
+
+        // Call _start once during initialization if it exists (for Go runtime initialization)
+        if let Ok(start_func) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
+            // Call and ignore any errors (Go modules may return normally or trap)
+            let _ = start_func.call(&mut store, ());
+        }
+
+        // Use a dummy metadata store for test mode (not used)
+        let metadata_store = MetadataStore::new_dummy();
+
+        Ok(Self {
+            store,
+            instance,
+            name: name.to_string(),
+            fuel_limit: limits.fuel,
+            metadata_store,
+        })
+    }
+
     fn add_wasi_functions(linker: &mut Linker<StoreData>) -> Result<()> {
         use crate::wasi_impl::Errno;
 
@@ -439,8 +515,7 @@ impl ModuleInstance {
 
                 // If this was a metadata file, process it immediately
                 if let Some(content) = close_result.metadata_content {
-                    // Debug output to show metadata is being processed on close
-                    eprintln!("WADUP: Processing metadata on fd_close ({} bytes)", content.len());
+                    tracing::debug!("Processing metadata on fd_close ({} bytes)", content.len());
                     if let Err(e) = Self::process_metadata_content(&content, caller.data_mut()) {
                         tracing::warn!("Failed to process metadata on close: {}", e);
                     }
@@ -451,10 +526,10 @@ impl ModuleInstance {
                     use crate::wasi_impl::SubcontentEmissionData;
                     match &emission.data {
                         SubcontentEmissionData::Bytes(bytes) => {
-                            eprintln!("WADUP: Processing subcontent on fd_close: {} ({} bytes)", emission.filename, bytes.len());
+                            tracing::debug!("Processing subcontent on fd_close: {} ({} bytes)", emission.filename, bytes.len());
                         }
                         SubcontentEmissionData::Slice { offset, length } => {
-                            eprintln!("WADUP: Processing subcontent slice on fd_close: {} (offset={}, length={})", emission.filename, offset, length);
+                            tracing::debug!("Processing subcontent slice on fd_close: {} (offset={}, length={})", emission.filename, offset, length);
                         }
                     }
                     Self::process_subcontent_emission(emission, caller.data_mut());
@@ -571,8 +646,9 @@ impl ModuleInstance {
             "environ_sizes_get",
             |mut caller: Caller<StoreData>, count_ptr: i32, size_ptr: i32| -> Result<i32> {
                 let memory = get_memory(&mut caller)?;
-                memory.write(&mut caller, count_ptr as usize, &0i32.to_le_bytes())?;
-                memory.write(&mut caller, size_ptr as usize, &0i32.to_le_bytes())?;
+                let (count, buf_size) = caller.data().wasi_ctx.environ_sizes();
+                memory.write(&mut caller, count_ptr as usize, &(count as i32).to_le_bytes())?;
+                memory.write(&mut caller, size_ptr as usize, &(buf_size as i32).to_le_bytes())?;
                 Ok(Errno::Success as i32)
             },
         )?;
@@ -581,7 +657,24 @@ impl ModuleInstance {
         linker.func_wrap(
             "wasi_snapshot_preview1",
             "environ_get",
-            |_caller: Caller<StoreData>, _environ_ptr: i32, _environ_buf_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<StoreData>, environ_ptr: i32, environ_buf_ptr: i32| -> Result<i32> {
+                let memory = get_memory(&mut caller)?;
+                let env_strings = caller.data().wasi_ctx.environ_strings();
+
+                let mut buf_offset = environ_buf_ptr as usize;
+                let mut ptr_offset = environ_ptr as usize;
+
+                for env_str in env_strings {
+                    // Write pointer to this env var
+                    memory.write(&mut caller, ptr_offset, &(buf_offset as u32).to_le_bytes())?;
+                    ptr_offset += 4;
+
+                    // Write "KEY=VALUE\0"
+                    let env_bytes = format!("{}\0", env_str);
+                    memory.write(&mut caller, buf_offset, env_bytes.as_bytes())?;
+                    buf_offset += env_bytes.len();
+                }
+
                 Ok(Errno::Success as i32)
             },
         )?;
@@ -1289,5 +1382,175 @@ impl ModuleInstance {
 
     pub fn metadata_store(&self) -> &MetadataStore {
         &self.metadata_store
+    }
+
+    /// Process content and return TestOutput for the test subcommand.
+    ///
+    /// Unlike process_content(), this:
+    /// - Returns TestOutput instead of ProcessingContext
+    /// - Does NOT recursively process subcontent (returns hex-encoded bytes)
+    /// - Always returns a result (even on failure)
+    pub fn process_content_for_test(
+        &mut self,
+        content_data: crate::shared_buffer::SharedBuffer,
+    ) -> crate::test_output::TestOutput {
+        use crate::test_output::{TestOutput, SubcontentOutput};
+        use crate::bindings_context::SubContentData;
+
+        // Maximum bytes to include in hex output (4KB)
+        const MAX_HEX_BYTES: usize = 4096;
+
+        // Update /data.bin in the in-memory filesystem (zero-copy)
+        let filesystem = &self.store.data().wasi_ctx.filesystem;
+        if let Err(e) = filesystem.set_data_bin(content_data.to_bytes()) {
+            return TestOutput::failure(format!("Failed to set data.bin: {}", e), 1, String::new(), String::new(), None);
+        }
+
+        // Set up new context
+        let content_uuid = uuid::Uuid::new_v4();
+        let ctx = ProcessingContext::new(content_uuid, content_data.clone());
+        self.store.data_mut().processing_ctx = ctx;
+
+        // Replenish fuel
+        if let Some(fuel) = self.fuel_limit {
+            if let Err(e) = self.store.set_fuel(fuel) {
+                return TestOutput::failure(format!("Failed to set fuel: {}", e), 1, String::new(), String::new(), None);
+            }
+        }
+
+        // Call the process function
+        let result = if let Ok(process_func) = self.instance
+            .get_typed_func::<(), i32>(&mut self.store, "process")
+        {
+            process_func.call(&mut self.store, ()).map(|code| code)
+        } else if let Ok(process_func) = self.instance
+            .get_typed_func::<(), ()>(&mut self.store, "process")
+        {
+            process_func.call(&mut self.store, ()).map(|_| 0)
+        } else {
+            return TestOutput::failure(
+                format!("Module '{}' process function has unsupported signature", self.name),
+                1, String::new(), String::new(), None
+            );
+        };
+
+        // Get filesystem reference before borrowing store mutably
+        let filesystem = self.store.data().wasi_ctx.filesystem.clone();
+
+        // Capture stdout/stderr
+        let (stdout, _stdout_truncated) = self.store.data().wasi_ctx.take_stdout();
+        let (stderr, _stderr_truncated) = self.store.data().wasi_ctx.take_stderr();
+
+        // Determine exit code and success
+        let (exit_code, error) = match &result {
+            Ok(0) => (0, None),
+            Ok(code) => (*code, Some(format!("Module returned error code: {}", code))),
+            Err(e) => {
+                let error_msg = e.to_string();
+                if error_msg.contains("fuel") || error_msg.contains("out of fuel") {
+                    (1, Some("Module exceeded fuel limit (CPU limit)".to_string()))
+                } else if error_msg.contains("stack overflow") {
+                    (1, Some("Module stack overflow".to_string()))
+                } else if error_msg.contains("memory") {
+                    (1, Some("Module memory limit exceeded".to_string()))
+                } else {
+                    (1, Some(error_msg))
+                }
+            }
+        };
+
+        // Process any remaining metadata files
+        if result.is_ok() && exit_code == 0 {
+            let _ = Self::process_remaining_metadata_files(&filesystem, &mut self.store);
+        }
+
+        // Extract context
+        let ctx = &mut self.store.data_mut().processing_ctx;
+
+        // Convert table_schemas and metadata to JSON format for WADUP Web
+        let metadata_json = if ctx.table_schemas.is_empty() && ctx.metadata.is_empty() {
+            None
+        } else {
+            // Build the { tables: [...], rows: [...] } structure
+            let tables: Vec<serde_json::Value> = ctx.table_schemas.iter().map(|schema| {
+                serde_json::json!({
+                    "name": schema.name,
+                    "columns": schema.columns.iter().map(|col| {
+                        serde_json::json!({
+                            "name": col.name,
+                            "data_type": col.data_type
+                        })
+                    }).collect::<Vec<_>>()
+                })
+            }).collect();
+
+            let rows: Vec<serde_json::Value> = ctx.metadata.iter().map(|row| {
+                serde_json::json!({
+                    "table_name": row.table_name,
+                    "values": row.values
+                })
+            }).collect();
+
+            Some(serde_json::json!({
+                "tables": tables,
+                "rows": rows
+            }))
+        };
+
+        // Convert subcontent to hex-encoded format (no recursion)
+        let subcontent_list: Vec<SubcontentOutput> = ctx.subcontent.iter().enumerate().map(|(index, emission)| {
+            let (data_bytes, size): (Vec<u8>, usize) = match &emission.data {
+                SubContentData::Bytes(bytes) => {
+                    (bytes.to_vec(), bytes.len())
+                }
+                SubContentData::Slice { offset, length } => {
+                    // Extract slice from parent content
+                    let parent_data = content_data.to_bytes();
+                    let end = (*offset + *length).min(parent_data.len());
+                    let start = (*offset).min(end);
+                    (parent_data[start..end].to_vec(), *length)
+                }
+            };
+
+            let truncated = data_bytes.len() > MAX_HEX_BYTES;
+            let hex_bytes = if truncated {
+                &data_bytes[..MAX_HEX_BYTES]
+            } else {
+                &data_bytes[..]
+            };
+            let data_hex = hex::encode(hex_bytes);
+
+            SubcontentOutput {
+                index,
+                filename: Some(emission.filename.clone()),
+                data_hex,
+                size,
+                truncated,
+                metadata: None,
+            }
+        }).collect();
+
+        let subcontent = if subcontent_list.is_empty() {
+            None
+        } else {
+            Some(subcontent_list)
+        };
+
+        // Clear context for next use
+        ctx.subcontent.clear();
+        ctx.metadata.clear();
+        ctx.table_schemas.clear();
+
+        if exit_code == 0 {
+            TestOutput::success(stdout, stderr, metadata_json, subcontent)
+        } else {
+            TestOutput::failure(
+                error.unwrap_or_else(|| "Unknown error".to_string()),
+                exit_code,
+                stdout,
+                stderr,
+                subcontent,
+            )
+        }
     }
 }

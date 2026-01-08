@@ -98,6 +98,17 @@ impl MetadataStore {
         })
     }
 
+    /// Create a dummy MetadataStore for test mode (no Elasticsearch connection).
+    pub fn new_dummy() -> Self {
+        Self {
+            es_url: String::new(),
+            es_index: String::new(),
+            client: reqwest::blocking::Client::new(),
+            content_state: Arc::new(Mutex::new(HashMap::new())),
+            table_schemas: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
     /// Start tracking a new content item
     pub fn start_content(
         &self,
