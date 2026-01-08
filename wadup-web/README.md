@@ -68,8 +68,10 @@ cd /path/to/wadup2
 This creates four images:
 - `wadup-build-rust:latest` - Rust compiler with wasm32-wasip1 target
 - `wadup-build-go:latest` - Go compiler with WASI support
-- `wadup-build-python:latest` - CPython 3.13 + WASI SDK + pre-built C extensions
+- `wadup-build-python:latest` - CPython 3.13.1 + WASI SDK + C extensions (lxml, pydantic)
 - `wadup-test-runner:latest` - WADUP runtime for testing modules
+
+**Note**: The first build of the Python image takes longer (~15-30 minutes) as it downloads and compiles all WASI dependencies from source. Subsequent builds use Docker layer caching.
 
 ### 2. Start Backend
 

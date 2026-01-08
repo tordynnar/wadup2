@@ -103,7 +103,7 @@ All languages use file-based metadata output (writing JSON to `/metadata/*.json`
 
 **Rust** modules export a `process()` function using `#[no_mangle] pub extern "C" fn process()`.
 
-**Python** modules use embedded CPython 3.13.7 with a `main()` function entry point. The C glue layer exports `process()`. Supports pure-Python third-party dependencies and C extensions (NumPy, Pandas) bundled into the WASM module.
+**Python** modules use embedded CPython 3.13.1 with a `main()` function entry point. The C glue layer exports `process()`. Supports pure-Python third-party dependencies and C extensions (lxml, pydantic) bundled into the WASM module.
 
 **Go** modules export a `process()` function using `//go:wasmexport process`.
 
@@ -628,7 +628,7 @@ See the `examples/` directory for working WASM modules:
 - **simple-test**: Basic module for testing the framework
 
 **Python Modules:**
-- **python-sqlite-parser**: Parses SQLite databases using CPython 3.13.7
+- **python-sqlite-parser**: Parses SQLite databases using CPython 3.13.1
 - **python-counter**: Demonstrates module reuse with global state
 - **python-module-test**: Tests C extension imports (sqlite3, json, etc.)
 - **python-multi-file**: Multi-file project with third-party dependencies (chardet, humanize, python-slugify)
@@ -654,8 +654,10 @@ All module builds use Docker containers, which include all required toolchains a
 This creates four images:
 - `wadup-build-rust:latest` - Rust compiler with wasm32-wasip1 target
 - `wadup-build-go:latest` - Go compiler with WASI support
-- `wadup-build-python:latest` - CPython 3.13 + WASI SDK + pre-built C extensions (lxml, pydantic)
+- `wadup-build-python:latest` - CPython 3.13.1 + WASI SDK + C extensions (lxml, pydantic)
 - `wadup-test-runner:latest` - WADUP runtime for testing modules
+
+**Note**: The first build of the Python image takes longer (~15-30 minutes) as it downloads and compiles all WASI dependencies (CPython, zlib, bzip2, xz, sqlite, libxml2, libxslt, lxml, pydantic_core) from source. Subsequent builds use Docker layer caching.
 
 **Build all examples:**
 ```bash
